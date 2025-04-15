@@ -122,6 +122,11 @@
                 <input type="range" id="fovSlider" min="1" max="120" value="75" step="1" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 mx-2">
                 <span id="fovValue" class="text-sm text-gray-600 w-8 text-right">75</span>
             </div>
+            <!-- Add Background Color Control -->
+            <div class="flex items-center justify-center space-x-1 mt-1">
+                <label for="bgColorPicker" class="text-sm text-gray-600 whitespace-nowrap">BG:</label>
+                <input type="color" id="bgColorPicker" value="#000000" class="h-6 w-full border border-gray-400 rounded cursor-pointer mx-2">
+            </div>
             <!-- Measurement Controls -->
             <div class="border-t pt-2 mt-2 border-gray-300 flex justify-center space-x-2">
                  <button id="clearPointsButton" class="text-xs bg-red-100 hover:bg-red-200 text-red-800 border border-red-300 hover:border-red-500 py-1 px-2 rounded shadow-sm">Clear Points</button>
@@ -143,6 +148,8 @@
     let scene, camera, renderer, controls, dropInViewer;
     // Add references for FOV controls
     let fovSlider, fovValueDisplay;
+    // Add reference for background color picker
+    let bgColorPicker;
     // Add variables for DragControls and drag state
     let dragControls;
     let draggedObject = null;
@@ -172,6 +179,8 @@
 
         // Scene
         scene = new THREE.Scene();
+        // Set initial background color
+        scene.background = new THREE.Color(0x000000); // Black
 
         // Camera
         const initialFov = 75; // Store initial FOV
@@ -223,6 +232,8 @@
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
         fovValueDisplay = document.getElementById('fovValue');
+        // Get Background Color Picker element
+        bgColorPicker = document.getElementById('bgColorPicker');
 
         // Set initial FOV display
         fovValueDisplay.textContent = initialFov;
@@ -257,6 +268,12 @@
             camera.fov = newFov;
             camera.updateProjectionMatrix();
             fovValueDisplay.textContent = newFov;
+        });
+
+        // Add Background Color Picker event listener
+        bgColorPicker.addEventListener('input', (event) => {
+            const newColor = event.target.value;
+            scene.background = new THREE.Color(newColor);
         });
 
         // Initialize DragControls after markerGroup is added to the scene
