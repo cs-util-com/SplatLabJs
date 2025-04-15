@@ -572,8 +572,6 @@
 
     function onDoubleClick(event) {
         event.preventDefault();
-        if (measurementState !== 'idle') return; // Don't place points while measuring
-
         // Check if the click is on the UI panel.
         const containerRect = document.getElementById('container').getBoundingClientRect();
         if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
@@ -681,17 +679,35 @@
 
     // --- Pointer Move Listener (for preview line) ---
     function onPointerMove(event) {
-        // Update NDC (already done in existing listener)
+        // Update NDC
         currentMouseNDC.x = (event.clientX / window.innerWidth) * 2 - 1;
         currentMouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
+        // Update preview line only if measuring and hovering over a valid marker
         if (measurementState === 'measuring' && currentMeasurementSequence.length > 0) {
-            updatePreviewLine();
-        } else if (previewLine) {
-            measurementGroup.remove(previewLine); // Remove if not measuring
-            previewLine.geometry.dispose();
-            previewLine.material.dispose();
-            previewLine = null;
+            clickRaycaster.setFromCamera(currentMouseNDC, camera);
+            const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
+
+            let hoveredMarker = null;
+            if (intersectsMarkers.length > 0) {
+                // Find the parent group which is the actual marker
+                let obj = intersectsMarkers[0].object;
+                while (obj && !obj.userData.isReferencePoint) {
+                    obj = obj.parent;
+                }
+                // Check if it's a valid marker and not the last one added
+                if (obj && obj.userData.isReferencePoint && obj !== currentMeasurementSequence[currentMeasurementSequence.length - 1].marker) {
+                    hoveredMarker = obj;
+                }
+            }
+
+            if (hoveredMarker) {
+                updatePreviewLine(hoveredMarker.position); // Pass target position
+            } else {
+                updatePreviewLine(null); // Hide preview line
+            }
+        } else {
+             updatePreviewLine(null); // Ensure preview is hidden if not measuring
         }
     }
 
@@ -1008,61 +1024,59 @@
         updatePreviewLine(); // Update preview from the new last point
     }
 
-    function updatePreviewLine() {
-        if (measurementState !== 'measuring' || currentMeasurementSequence.length === 0) {
-            if (previewLine) measurementGroup.remove(previewLine); // Clean up if exists
+    // Modified to accept an optional target point
+    function updatePreviewLine(targetPoint = null) { // Default to null
+        // Hide and return if no target point or not measuring
+        if (!targetPoint || measurementState !== 'measuring' || currentMeasurementSequence.length === 0) {
+            if (previewLine) {
+                previewLine.visible = false; // Just hide, reuse geometry/material
+            }
             return;
         }
 
         const lastPoint = currentMeasurementSequence[currentMeasurementSequence.length - 1].point;
         const color = measurementColors[measurementColorIndex];
 
-        // Raycast from current mouse NDC to find intersection with a plane
-        // Use a plane parallel to the camera view, passing through the last point
-        const viewPlane = new THREE.Plane();
-        const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
-        viewPlane.setFromNormalAndCoplanarPoint(cameraDirection.negate(), lastPoint); // Negate for correct plane normal
+        // Apply axis snapping preview if active, using the targetPoint from hover
+        let previewEndPoint = targetPoint.clone(); // Start with the hovered marker's position
+        if (currentAxisSnap) {
+             const delta = previewEndPoint.clone().sub(lastPoint); // Vector from last point to target
+             previewEndPoint = lastPoint.clone(); // Start preview from last point
 
-        const previewRaycaster = new THREE.Raycaster(); // Use a temporary raycaster
-        previewRaycaster.setFromCamera(currentMouseNDC, camera);
-        const targetPoint = new THREE.Vector3();
-
-        if (previewRaycaster.ray.intersectPlane(viewPlane, targetPoint)) {
-            // Apply axis snapping preview if active
-            let previewEndPoint = targetPoint.clone();
-            if (currentAxisSnap) {
-                 const delta = previewEndPoint.sub(lastPoint);
-                 previewEndPoint = lastPoint.clone(); // Start from last point
-                 if (currentAxisSnap === 'x') previewEndPoint.x += delta.x;
-                 else if (currentAxisSnap === 'y') previewEndPoint.y += delta.y;
-                 else if (currentAxisSnap === 'z') previewEndPoint.z += delta.z;
-            }
+             // Project delta onto the snapped axis/axes (simplified example for single axis)
+             // A more complex version would handle multi-segment snapping preview
+             if (currentAxisSnap === 'x') {
+                 previewEndPoint.x += delta.x;
+             } else if (currentAxisSnap === 'y') {
+                 previewEndPoint.y += delta.y;
+             } else if (currentAxisSnap === 'z') {
+                 previewEndPoint.z += delta.z;
+             }
+             // Note: This simplified preview for snapping shows a direct line along the snapped axis's delta component.
+             // A full preview of the multi-segment snapped path is more complex.
+        }
 
 
-            if (!previewLine) {
-                const geometry = new THREE.BufferGeometry().setFromPoints([lastPoint, previewEndPoint]);
-                const material = new THREE.LineDashedMaterial({
-                    color: color,
-                    linewidth: 1,
-                    scale: 1,
-                    dashSize: 0.1,
-                    gapSize: 0.05,
-                });
-                previewLine = new THREE.Line(geometry, material);
-                previewLine.computeLineDistances(); // Important for dashed lines
-                measurementGroup.add(previewLine);
-            } else {
-                previewLine.geometry.setFromPoints([lastPoint, previewEndPoint]);
-                previewLine.geometry.attributes.position.needsUpdate = true;
-                previewLine.computeLineDistances(); // Recompute for dashed lines
-                previewLine.material.color.setHex(color); // Ensure color is correct
-                previewLine.visible = true;
-            }
+        if (!previewLine) {
+            const geometry = new THREE.BufferGeometry().setFromPoints([lastPoint, previewEndPoint]);
+            const material = new THREE.LineDashedMaterial({
+                color: color,
+                linewidth: 1,
+                scale: 1,
+                dashSize: 0.1,
+                gapSize: 0.05,
+            });
+            previewLine = new THREE.Line(geometry, material);
+            previewLine.computeLineDistances(); // Important for dashed lines
+            measurementGroup.add(previewLine);
         } else {
-             if (previewLine) previewLine.visible = false; // Hide if no intersection
+            previewLine.geometry.setFromPoints([lastPoint, previewEndPoint]);
+            previewLine.geometry.attributes.position.needsUpdate = true;
+            previewLine.computeLineDistances(); // Recompute for dashed lines
+            previewLine.material.color.setHex(color); // Ensure color is correct
+            previewLine.visible = true; // Make sure it's visible
         }
     }
-
 
     // --- Helper Functions ---
 
