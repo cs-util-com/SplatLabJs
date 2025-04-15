@@ -95,7 +95,7 @@ Once you have placed reference points, you can create measurements between them.
 *   **Place Reference Point:** Left-click on a surface (raycast hit)
 *   **Start Measurement / Add Point:** Left-click on an existing Reference Point
 *   **Axis Snap (while measuring, before next point):** Arrow Keys (Left=X, Right=Z, Up/Down=Y)
-*   **Set Scale:** Double-Click on a segment distance label (when not measuring)
+*   **Set Scale:** Left-click on a segment distance label (when not measuring)
 *   **Remove Last Measurement Segment (while measuring):** Backspace / Delete
 *   **Finish Path Measurement (Open):** Enter / ESC (while measuring)
 *   **Finish Area Measurement (Closed):** Left-click on the *first* point of the current measurement (while measuring)

@@ -19,6 +19,7 @@
         width: 100%;
         height: 100%;
         z-index: 0; /* Behind the UI panel */
+        cursor: crosshair; /* Indicate interaction possibility */
     }
     #container {
         position: absolute; /* Changed from relative */
@@ -65,6 +66,14 @@
     .file-ext-small {
          background-color: #dfdfdf; /* Tailwind bg-gray-100 */
          padding-bottom: 1px;
+    }
+    .measurement-label {
+        color: white;
+        padding: 2px 5px;
+        border-radius: 3px;
+        font-size: 10px; /* Smaller font for labels */
+        font-family: sans-serif;
+        text-shadow: 1px 1px 2px black; /* Improve readability */
     }
   </style>
   <script type="importmap">
@@ -113,6 +122,11 @@
                 <input type="range" id="fovSlider" min="1" max="120" value="75" step="1" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 mx-2">
                 <span id="fovValue" class="text-sm text-gray-600 w-8 text-right">75</span>
             </div>
+            <!-- Measurement Controls -->
+            <div class="border-t pt-2 mt-2 border-gray-300 flex justify-center space-x-2">
+                 <button id="clearPointsButton" class="text-xs bg-red-100 hover:bg-red-200 text-red-800 border border-red-300 hover:border-red-500 py-1 px-2 rounded shadow-sm">Clear Points</button>
+                 <button id="clearMeasurementsButton" class="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-800 border border-yellow-300 hover:border-yellow-500 py-1 px-2 rounded shadow-sm">Clear Measures</button>
+            </div>
         </div>
     </div>
   </div>
@@ -143,6 +157,16 @@
     // Add variable to store current mouse NDC
     const currentMouseNDC = new THREE.Vector2();
 
+    // --- Measurement Variables ---
+    let measurementState = 'idle'; // 'idle', 'measuring'
+    let currentMeasurementSequence = []; // { point: THREE.Vector3, marker: THREE.Group, segmentLine?: THREE.Line, distanceLabel?: THREE.Sprite, areaLabel?: THREE.Sprite }
+    let measurementGroup; // Group for lines and labels
+    let previewLine = null;
+    let measurementColors = [0xff00ff, 0x00ffff, 0xffff00, 0xffa500, 0x00ff7f, 0xadd8e6]; // Magenta, Cyan, Yellow, Orange, SpringGreen, LightBlue
+    let measurementColorIndex = 0;
+    let scaleFactor = 1.0; // 1 unit in Three.js = 1 unit in real world initially
+    let currentAxisSnap = null; // null, 'x', 'y', 'z'
+
     function initThree() {
         const container = document.getElementById('renderer-container');
 
@@ -161,11 +185,7 @@
         container.appendChild(renderer.domElement);
 
         // Add pointermove listener to track mouse position
-        renderer.domElement.addEventListener('pointermove', (event) => {
-            // Calculate normalized device coordinates (-1 to +1)
-            currentMouseNDC.x = (event.clientX / window.innerWidth) * 2 - 1;
-            currentMouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
-        }, false);
+        renderer.domElement.addEventListener('pointermove', onPointerMove, false); // Renamed for clarity
 
         // Controls
         controls = new OrbitControls(camera, renderer.domElement);
@@ -195,6 +215,10 @@
         // Create a group to hold all marker spheres
         markerGroup = new THREE.Group(); // Assign to the outer scope variable
         scene.add(markerGroup); // Add the group to the scene
+
+        // --- Measurement Group Initialization ---
+        measurementGroup = new THREE.Group();
+        scene.add(measurementGroup);
 
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
@@ -345,6 +369,11 @@
             dragOffset.set(0,0,0);
         });
 
+        // --- Measurement Event Listeners ---
+        renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement actions
+        window.addEventListener('keydown', onKeyDown, false);
+        document.getElementById('clearPointsButton').addEventListener('click', clearReferencePoints);
+        document.getElementById('clearMeasurementsButton').addEventListener('click', clearMeasurements);
 
         // Handle window resize
         window.addEventListener('resize', onWindowResize, false);
@@ -392,7 +421,7 @@
     }
 
     // Assign functions to window object to make them accessible from inline HTML event handlers
-    window.onFileChange = function(arg) {
+    window.onFileChange = function(arg) { // Assign directly to window.onFileChange
       const viewFile = document.getElementById("viewFile");
 
       if (!arg || !arg.files || arg.files.length === 0) {
@@ -470,8 +499,7 @@
       }
     }
 
-    // --- Click-to-Spawn Sphere Feature ---
-
+    // --- Click-to-Spawn Reference Point Feature (Modified for dblclick) ---
     // --- Define materials and geometry for the cross marker ---
     const baseCrossSize = 0.2; // Base size of the cross arms at reference distance
     const crossThicknessRatio = 0.1; // Thickness relative to size
@@ -481,7 +509,7 @@
     const crossMaterialY = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); // Green for Y
     const crossMaterialZ = new THREE.MeshBasicMaterial({ color: 0x0000ff }); // Blue for Z
 
-    // Function to create a cross marker at the hit position, scaled by distance
+    // Function to create a cross marker (Reference Point)
     function createCrossMarkerAtPosition(position, cameraPosition) {
         const distance = position.distanceTo(cameraPosition);
         const referenceDistance = 5.0; // Adjust as needed - distance at which base size is used
@@ -519,9 +547,11 @@
 
         // No need to scale the group, as geometry size is dynamic
         crossGroup.position.copy(position);
+        crossGroup.userData.isReferencePoint = true;
+        crossGroup.userData.originalPosition = position.clone(); // Store initial position if needed later
         markerGroup.add(crossGroup); // Add to the main marker group
 
-        console.log(`Cross marker added at: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)} with scale factor ${scaleFactor.toFixed(2)} (dist: ${distance.toFixed(2)})`);
+        console.log(`Reference Point added at: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)} with scale factor ${scaleFactor.toFixed(2)} (dist: ${distance.toFixed(2)})`);
 
         // Dispose of dynamic geometry
         dynamicCrossGeometryX.dispose();
@@ -530,112 +560,730 @@
         // Note: DragControls automatically updates its list when children are added to markerGroup
     }
 
+    // --- Raycaster Setup and Event Handling ---
+    const outHits = [];
+    const renderDimensions = new THREE.Vector2();
+    const clickRaycaster = new THREE.Raycaster(); // Use a separate raycaster for clicks to avoid conflicts
+    clickRaycaster.params.Line.threshold = 0.1; // Adjust threshold for clicking lines
+    clickRaycaster.params.Points.threshold = 0.1; // If needed for points
 
-    // --- Raycaster Setup and Click Handling ---
-    const outHits = []; // Array to store intersection results
-    const renderDimensions = new THREE.Vector2(); // To store canvas dimensions
-
-    // ADD dblclick listener
+    // --- Double Click Listener (for placing points ONLY) ---
     renderer.domElement.addEventListener('dblclick', onDoubleClick, false);
 
-    // ADD onDoubleClick function
     function onDoubleClick(event) {
-        // Prevent default double-click behavior (e.g., text selection)
         event.preventDefault();
+        if (measurementState !== 'idle') return; // Don't place points while measuring
 
         // Check if the click is on the UI panel.
         const containerRect = document.getElementById('container').getBoundingClientRect();
         if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
             event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
-            // Click is inside the UI panel, do nothing here.
-            return;
+            return; // Click is inside the UI panel
         }
 
-        // Check if the double-click hit an existing marker arm
-        // Use the dragRaycaster for this check
+        // Check if double-clicking an existing marker (to delete it)
         const mouse = new THREE.Vector2(
             (event.clientX / window.innerWidth) * 2 - 1,
             -(event.clientY / window.innerHeight) * 2 + 1
         );
-        dragRaycaster.setFromCamera(mouse, camera);
-        const intersects = dragRaycaster.intersectObjects(markerGroup.children, true); // Check recursively
+        clickRaycaster.setFromCamera(mouse, camera); // Use clickRaycaster
+        const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
 
-        if (intersects.length > 0) {
-            // Check if the first intersected object is one of the cross arms
-            const intersectedObject = intersects[0].object;
-            const intersectedName = intersectedObject.name;
-            if (intersectedName === 'crossX' || intersectedName === 'crossY' || intersectedName === 'crossZ') {
-                // --- Modification Start ---
-                // Get the parent group (the cross marker)
+        if (intersectsMarkers.length > 0) {
+            const intersectedObject = intersectsMarkers[0].object;
+            if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
                 const crossToRemove = intersectedObject.parent;
-                if (crossToRemove && crossToRemove.isGroup) {
-                    // Remove the entire cross marker group from the main marker group
-                    markerGroup.remove(crossToRemove);
-                    console.log("Cross marker removed.");
-
-                    // Optional: Dispose geometry/material if they were unique per marker
-                    // In this case, materials are shared, and geometry was disposed on creation.
-                    // Removing from the group is usually sufficient for garbage collection.
-                } else {
-                     console.warn("Could not find parent group to remove for:", intersectedName);
-                }
-                // --- Modification End ---
-
+                markerGroup.remove(crossToRemove);
+                // Also remove any measurements connected ONLY to this point (more complex, skip for now)
+                console.log("Reference Point removed by double-click.");
+                // Clean up associated measurements if needed (advanced)
+                cleanupMeasurementsForPoint(crossToRemove);
                 return; // Don't proceed to splat raycasting
             }
         }
 
-
-        console.log("Double-click detected (not on marker). Raycasting splats...");
-
-        // Access the internal raycaster from the viewer instance
+        // --- Raycast against splats to place a NEW point ---
         const internalRaycaster = dropInViewer?.viewer?.raycaster;
-
         if (!internalRaycaster || !dropInViewer.viewer.splatMesh || dropInViewer.viewer.splatMesh.getSplatCount() === 0) {
-            console.log("No splats loaded, splat mesh not ready, or internal raycaster not found.");
-            return; // Don't raycast if no splats are loaded or raycaster isn't available
+            console.log("No splats loaded or raycaster not ready for placing point.");
+            return;
         }
 
-        // Calculate mouse position relative to the canvas
         const rect = renderer.domElement.getBoundingClientRect();
-        const screenPosition = new THREE.Vector2(
-            event.clientX - rect.left,
-            event.clientY - rect.top
-        );
-
-        // Get current render dimensions
+        const screenPosition = new THREE.Vector2(event.clientX - rect.left, event.clientY - rect.top);
         renderer.getSize(renderDimensions);
-
-        // Reset hits array
         outHits.length = 0;
-
-        // Set up the raycaster from the camera and screen position
-        // Note: We use setFromCameraAndScreenPosition for the gaussian-splats-3d raycaster
         internalRaycaster.setFromCameraAndScreenPosition(camera, screenPosition, renderDimensions);
-
-        // Perform the intersection test against the splat mesh
         internalRaycaster.intersectSplatMesh(dropInViewer.viewer.splatMesh, outHits);
 
-        // If we hit one or more splats
         if (outHits.length > 0) {
-            // The first hit (outHits[0]) is usually the closest one
-            const hit = outHits[0];
-            const hitPosition = hit.origin; // hit.origin is the intersection point in world space
-
-            console.log("Splat hit at:", hitPosition);
-
-            // Center the camera controls on the hit point
-            controls.target.copy(hitPosition);
-            controls.update(); // Apply the target change immediately
-
-            // Create the cross marker at the hit position, passing camera position for scaling
-            createCrossMarkerAtPosition(hitPosition, camera.position); // Pass camera position
-
+            const hitPosition = outHits[0].origin;
+            createCrossMarkerAtPosition(hitPosition, camera.position);
+            // Optional: Center controls on new point? Maybe not for double-click.
+            // controls.target.copy(hitPosition);
+            // controls.update();
         } else {
             console.log("No splat hit on double-click.");
         }
     }
 
+    // --- Click Listener (for measurements AND scale setting) --- // Renamed comment for clarity
+    function onClick(event) {
+        event.preventDefault();
+        // Ignore clicks during drag
+        if (draggedObject) return;
+
+        // Check if the click is on the UI panel.
+        const containerRect = document.getElementById('container').getBoundingClientRect();
+        if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
+            event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
+            return; // Click is inside the UI panel
+        }
+
+        const mouse = new THREE.Vector2(
+            (event.clientX / window.innerWidth) * 2 - 1,
+            -(event.clientY / window.innerHeight) * 2 + 1
+        );
+        clickRaycaster.setFromCamera(mouse, camera);
+
+        // 1. Check for clicks on existing distance labels (for scaling)
+        const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
+            .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel); // Only consider distance labels
+
+        if (intersectsLabels.length > 0 && measurementState === 'idle') {
+            const clickedLabel = intersectsLabels[0].object;
+            setReferenceScale(clickedLabel);
+            return; // Don't proceed further
+        }
+
+        // 2. Check for clicks on reference points (markers)
+        const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
+        let clickedMarker = null;
+        if (intersectsMarkers.length > 0) {
+            // Find the parent group which is the actual marker
+            let obj = intersectsMarkers[0].object;
+            while (obj && !obj.userData.isReferencePoint) {
+                obj = obj.parent;
+            }
+            if (obj && obj.userData.isReferencePoint) {
+                clickedMarker = obj;
+            }
+        }
+
+        if (clickedMarker) {
+            if (measurementState === 'idle') {
+                startMeasurement(clickedMarker);
+            } else if (measurementState === 'measuring') {
+                addPointToMeasurement(clickedMarker);
+            }
+        }
+    }
+
+    // --- Pointer Move Listener (for preview line) ---
+    function onPointerMove(event) {
+        // Update NDC (already done in existing listener)
+        currentMouseNDC.x = (event.clientX / window.innerWidth) * 2 - 1;
+        currentMouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+        if (measurementState === 'measuring' && currentMeasurementSequence.length > 0) {
+            updatePreviewLine();
+        } else if (previewLine) {
+            measurementGroup.remove(previewLine); // Remove if not measuring
+            previewLine.geometry.dispose();
+            previewLine.material.dispose();
+            previewLine = null;
+        }
+    }
+
+    // --- Key Down Listener ---
+    function onKeyDown(event) {
+        if (measurementState === 'measuring') {
+            switch (event.key) {
+                case 'Enter':
+                case 'Escape': // ESC
+                    finishMeasurement(false); // Finish as open path
+                    event.preventDefault();
+                    break;
+                case 'Backspace':
+                case 'Delete':
+                    removeLastMeasurementSegment();
+                    event.preventDefault();
+                    break;
+                case 'ArrowLeft':
+                    currentAxisSnap = 'x';
+                    console.log("Axis Snap: X");
+                    updatePreviewLine(); // Update preview with snap indication
+                    event.preventDefault();
+                    break;
+                case 'ArrowRight': // Using Right Arrow for Z as per spec
+                    currentAxisSnap = 'z';
+                    console.log("Axis Snap: Z");
+                    updatePreviewLine();
+                    event.preventDefault();
+                    break;
+                case 'ArrowUp':
+                case 'ArrowDown':
+                    currentAxisSnap = 'y';
+                    console.log("Axis Snap: Y");
+                    updatePreviewLine();
+                    event.preventDefault();
+                    break;
+            }
+        }
+    }
+
+    // --- Measurement Core Functions ---
+
+    function startMeasurement(startMarker) {
+        if (measurementState !== 'idle') return;
+        measurementState = 'measuring';
+        currentMeasurementSequence = [{ point: startMarker.position.clone(), marker: startMarker }];
+        measurementColorIndex = (measurementColorIndex + 1) % measurementColors.length;
+        currentAxisSnap = null; // Reset axis snap
+        console.log("Started measurement sequence.");
+        // Initialize preview line immediately
+        updatePreviewLine();
+    }
+
+    function addPointToMeasurement(nextMarker) {
+        if (measurementState !== 'measuring' || currentMeasurementSequence.length === 0) return;
+
+        const startPointInfo = currentMeasurementSequence[currentMeasurementSequence.length - 1];
+        const endPoint = nextMarker.position.clone();
+        const startPoint = startPointInfo.point;
+
+        // Check if closing the loop
+        if (currentMeasurementSequence.length >= 2 && nextMarker === currentMeasurementSequence[0].marker) {
+            // Closing the loop
+            drawMeasurementSegment(startPoint, currentMeasurementSequence[0].point, currentMeasurementSequence[0].marker); // Draw segment to first point
+            finishMeasurement(true); // Finish as closed area
+            return;
+        }
+
+        // Avoid adding the same point consecutively
+        if (nextMarker === startPointInfo.marker) {
+            console.log("Cannot add the same point consecutively.");
+            return;
+        }
+
+        // Draw the segment (potentially with axis snapping)
+        drawMeasurementSegment(startPoint, endPoint, nextMarker);
+
+        // Add the new point to the sequence (handled within drawMeasurementSegment if snapping)
+        if (!currentAxisSnap) { // Only add if not snapping (snapping adds intermediate points)
+             currentMeasurementSequence.push({ point: endPoint, marker: nextMarker });
+        }
+
+        currentAxisSnap = null; // Reset axis snap after adding a point
+        updatePreviewLine(); // Update preview for the next potential segment
+    }
+
+    function drawMeasurementSegment(p1, p2, endMarker) {
+        const color = measurementColors[measurementColorIndex];
+        let segments = []; // Array to hold {start, end} points for segments
+
+        if (currentAxisSnap) {
+            // --- Axis Snapping Logic ---
+            let intermediatePoints = [p1.clone()];
+            let current = p1.clone();
+            const target = p2.clone();
+            const delta = target.clone().sub(current);
+
+            // For axis snapping, create orthogonal segments based on which axis was selected
+            if (currentAxisSnap === 'x') {
+                // Move along X first, then Y, then Z
+                let p = current.clone();
+                p.x = target.x;  // Move to target X
+                if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
+                
+                p.y = target.y;  // Then move to target Y
+                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
+                    intermediatePoints.push(p.clone());
+                
+                p.z = target.z;  // Then move to target Z
+                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
+                    intermediatePoints.push(p.clone());
+            } 
+            else if (currentAxisSnap === 'y') {
+                // Move along Y first, then X, then Z
+                let p = current.clone();
+                p.y = target.y;  // Move to target Y
+                if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
+                
+                p.x = target.x;  // Then move to target X
+                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
+                    intermediatePoints.push(p.clone());
+                
+                p.z = target.z;  // Then move to target Z
+                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
+                    intermediatePoints.push(p.clone());
+            }
+            else if (currentAxisSnap === 'z') {
+                // Move along Z first, then X, then Y
+                let p = current.clone();
+                p.z = target.z;  // Move to target Z
+                if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
+                
+                p.x = target.x;  // Then move to target X
+                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
+                    intermediatePoints.push(p.clone());
+                
+                p.y = target.y;  // Then move to target Y
+                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
+                    intermediatePoints.push(p.clone());
+            }
+
+            // Create segments from intermediate points
+            for (let i = 0; i < intermediatePoints.length - 1; i++) {
+                segments.push({ start: intermediatePoints[i], end: intermediatePoints[i+1] });
+            }
+
+            // Add intermediate points and final point to sequence
+            // Skip the very first point (p1) as it's already there
+            for (let i = 1; i < intermediatePoints.length; i++) {
+                 // Use the endMarker only for the very last point added by snapping
+                 const markerForPoint = (i === intermediatePoints.length - 1) ? endMarker : null;
+                 currentMeasurementSequence.push({ point: intermediatePoints[i], marker: markerForPoint });
+            }
+
+        } else {
+            // --- No Axis Snapping ---
+            segments.push({ start: p1, end: p2 });
+            // The calling function (addPointToMeasurement) will add p2 to the sequence
+        }
+
+        // --- Draw Lines and Labels for each segment ---
+        segments.forEach(seg => {
+            const distance = seg.start.distanceTo(seg.end) * scaleFactor;
+            if (distance < 1e-6) return; // Skip zero-length segments
+
+            const geometry = new THREE.BufferGeometry().setFromPoints([seg.start, seg.end]);
+            const material = new THREE.LineBasicMaterial({ color: color, linewidth: 2 }); // Linewidth might not work on all systems
+            const line = new THREE.Line(geometry, material);
+            line.userData.isMeasurementLine = true;
+            line.userData.colorIndex = measurementColorIndex; // Store color index
+            measurementGroup.add(line);
+
+            const label = createDistanceLabel(distance.toFixed(2), color); // Use scaleFactor
+            label.position.copy(seg.start).lerp(seg.end, 0.5); // Position at midpoint
+            label.userData.isDistanceLabel = true;
+            label.userData.segmentStart = seg.start.clone(); // Store segment points for scaling
+            label.userData.segmentEnd = seg.end.clone();
+            label.userData.colorIndex = measurementColorIndex;
+            measurementGroup.add(label);
+
+            // Associate line and label with the *starting* point of this segment in the sequence
+            // Find the sequence entry corresponding to seg.start
+             const sequenceEntry = currentMeasurementSequence.find(entry => entry.point.equals(seg.start));
+             if (sequenceEntry) {
+                 if (!sequenceEntry.segments) sequenceEntry.segments = [];
+                 sequenceEntry.segments.push({ line: line, label: label });
+             } else {
+                 console.warn("Could not find sequence entry for segment start:", seg.start);
+                 // Fallback: associate with the last entry (less accurate for snapping)
+                 const lastEntry = currentMeasurementSequence[currentMeasurementSequence.length - 1];
+                 if (!lastEntry.segments) lastEntry.segments = [];
+                 lastEntry.segments.push({ line: line, label: label });
+             }
+        });
+    }
+
+    function finishMeasurement(closed) {
+        if (measurementState !== 'measuring' || currentMeasurementSequence.length < (closed ? 3 : 2)) {
+            // Need at least 3 points for area, 2 for path
+            console.log("Not enough points to finish measurement.");
+            resetMeasurementState();
+            return;
+        }
+
+        const color = measurementColors[measurementColorIndex];
+        let totalLength = 0;
+        let lastPoint = currentMeasurementSequence[0].point;
+
+        // Calculate total length by summing segment distances associated with points
+        for (let i = 0; i < currentMeasurementSequence.length; i++) {
+            const entry = currentMeasurementSequence[i];
+            if (entry.segments) {
+                entry.segments.forEach(segData => {
+                    // Extract distance from label text (assuming format "value")
+                    const dist = parseFloat(segData.label.userData.text);
+                    if (!isNaN(dist)) {
+                        totalLength += dist;
+                    }
+                });
+            }
+        }
+
+
+        if (closed) {
+            // --- Calculate Area ---
+            const points2D = projectPointsToPlane(currentMeasurementSequence.map(p => p.point));
+            const area = calculatePolygonArea(points2D) * (scaleFactor * scaleFactor); // Apply scale factor squared for area
+
+            if (area > 1e-6) {
+                const areaLabel = createDistanceLabel(`Area: ${area.toFixed(2)}`, color, 14); // Slightly larger font for area
+                // Calculate centroid for label position
+                const centroid = new THREE.Vector3();
+                currentMeasurementSequence.forEach(p => centroid.add(p.point));
+                centroid.divideScalar(currentMeasurementSequence.length);
+                areaLabel.position.copy(centroid);
+                areaLabel.userData.isAreaLabel = true;
+                areaLabel.userData.colorIndex = measurementColorIndex;
+                measurementGroup.add(areaLabel);
+                // Store area label reference (e.g., with the first point)
+                currentMeasurementSequence[0].areaLabel = areaLabel;
+            }
+             console.log(`Finished measurement (Closed Area): ${area.toFixed(2)}, Total Length: ${totalLength.toFixed(2)}`);
+
+        } else {
+             console.log(`Finished measurement (Open Path): Total Length: ${totalLength.toFixed(2)}`);
+             // Optionally add a "Total Length" label at the end point?
+        }
+
+
+        resetMeasurementState();
+    }
+
+    function resetMeasurementState() {
+        measurementState = 'idle';
+        currentMeasurementSequence = [];
+        currentAxisSnap = null;
+        if (previewLine) {
+            measurementGroup.remove(previewLine);
+            previewLine.geometry.dispose();
+            previewLine.material.dispose();
+            previewLine = null;
+        }
+        console.log("Measurement state reset.");
+    }
+
+    function removeLastMeasurementSegment() {
+        if (measurementState !== 'measuring' || currentMeasurementSequence.length <= 1) {
+             // If only the start point exists, cancel the measurement
+             if (currentMeasurementSequence.length === 1) {
+                 resetMeasurementState();
+             }
+             return;
+        }
+
+        // Find the last entry that has segment data associated with it
+        let entryToRemoveSegmentsFrom = null;
+        for (let i = currentMeasurementSequence.length - 1; i >= 0; i--) {
+            if (currentMeasurementSequence[i].segments && currentMeasurementSequence[i].segments.length > 0) {
+                entryToRemoveSegmentsFrom = currentMeasurementSequence[i];
+                break;
+            }
+        }
+
+        if (!entryToRemoveSegmentsFrom) {
+             console.warn("Could not find previous entry with segments to remove.");
+             // As a fallback, just remove the last point added?
+             currentMeasurementSequence.pop();
+             updatePreviewLine();
+             return;
+        }
+
+
+        // Remove the last segment (line and label) associated with that entry
+        const lastSegmentData = entryToRemoveSegmentsFrom.segments.pop();
+        if (lastSegmentData) {
+            measurementGroup.remove(lastSegmentData.line);
+            measurementGroup.remove(lastSegmentData.label);
+            lastSegmentData.line.geometry.dispose();
+            lastSegmentData.line.material.dispose();
+            disposeLabel(lastSegmentData.label); // Helper to dispose canvas/texture
+        }
+
+        // Remove the point(s) added by the last operation (could be multiple if snapped)
+        // Find the index of the entry we just modified
+        const startIndexToRemove = currentMeasurementSequence.indexOf(entryToRemoveSegmentsFrom);
+
+        // Remove all points *after* this entry, as they were part of the removed segment(s)
+        if (startIndexToRemove < currentMeasurementSequence.length -1) {
+             currentMeasurementSequence.splice(startIndexToRemove + 1);
+        }
+
+
+        console.log("Removed last measurement segment/point(s).");
+        updatePreviewLine(); // Update preview from the new last point
+    }
+
+    function updatePreviewLine() {
+        if (measurementState !== 'measuring' || currentMeasurementSequence.length === 0) {
+            if (previewLine) measurementGroup.remove(previewLine); // Clean up if exists
+            return;
+        }
+
+        const lastPoint = currentMeasurementSequence[currentMeasurementSequence.length - 1].point;
+        const color = measurementColors[measurementColorIndex];
+
+        // Raycast from current mouse NDC to find intersection with a plane
+        // Use a plane parallel to the camera view, passing through the last point
+        const viewPlane = new THREE.Plane();
+        const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
+        viewPlane.setFromNormalAndCoplanarPoint(cameraDirection.negate(), lastPoint); // Negate for correct plane normal
+
+        const previewRaycaster = new THREE.Raycaster(); // Use a temporary raycaster
+        previewRaycaster.setFromCamera(currentMouseNDC, camera);
+        const targetPoint = new THREE.Vector3();
+
+        if (previewRaycaster.ray.intersectPlane(viewPlane, targetPoint)) {
+            // Apply axis snapping preview if active
+            let previewEndPoint = targetPoint.clone();
+            if (currentAxisSnap) {
+                 const delta = previewEndPoint.sub(lastPoint);
+                 previewEndPoint = lastPoint.clone(); // Start from last point
+                 if (currentAxisSnap === 'x') previewEndPoint.x += delta.x;
+                 else if (currentAxisSnap === 'y') previewEndPoint.y += delta.y;
+                 else if (currentAxisSnap === 'z') previewEndPoint.z += delta.z;
+            }
+
+
+            if (!previewLine) {
+                const geometry = new THREE.BufferGeometry().setFromPoints([lastPoint, previewEndPoint]);
+                const material = new THREE.LineDashedMaterial({
+                    color: color,
+                    linewidth: 1,
+                    scale: 1,
+                    dashSize: 0.1,
+                    gapSize: 0.05,
+                });
+                previewLine = new THREE.Line(geometry, material);
+                previewLine.computeLineDistances(); // Important for dashed lines
+                measurementGroup.add(previewLine);
+            } else {
+                previewLine.geometry.setFromPoints([lastPoint, previewEndPoint]);
+                previewLine.geometry.attributes.position.needsUpdate = true;
+                previewLine.computeLineDistances(); // Recompute for dashed lines
+                previewLine.material.color.setHex(color); // Ensure color is correct
+                previewLine.visible = true;
+            }
+        } else {
+             if (previewLine) previewLine.visible = false; // Hide if no intersection
+        }
+    }
+
+
+    // --- Helper Functions ---
+
+    function createDistanceLabel(text, colorHex, fontSize = 12) {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        context.font = `Bold ${fontSize}px Arial`; // Use Arial or sans-serif
+
+        // Measure text width for canvas sizing
+        const textMetrics = context.measureText(text);
+        const textWidth = textMetrics.width;
+        const padding = 8; // Add padding
+
+        canvas.width = textWidth + padding * 2;
+        canvas.height = fontSize + padding * 2; // Adjust height based on font size and padding
+
+        // Re-apply font after resizing canvas (important!)
+        context.font = `Bold ${fontSize}px Arial`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+
+        // Background
+        context.fillStyle = `#${colorHex.toString(16).padStart(6, '0')}`; // Use hex color for background
+        context.globalAlpha = 0.7; // Semi-transparent background
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.globalAlpha = 1.0; // Reset alpha
+
+        // Text
+        context.fillStyle = '#ffffff'; // White text
+        context.fillText(text, canvas.width / 2, canvas.height / 2);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.needsUpdate = true;
+
+        const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+        const sprite = new THREE.Sprite(material);
+
+        // Scale sprite based on canvas aspect ratio to avoid distortion
+        const aspect = canvas.width / canvas.height;
+        sprite.scale.set(0.05 * aspect, 0.05, 1); // Adjust base scale (0.2) as needed
+
+        sprite.renderOrder = 1; // Render labels on top
+        sprite.userData.text = text; // Store text for potential updates/parsing
+
+        return sprite;
+    }
+
+    function disposeLabel(labelSprite) {
+        if (labelSprite && labelSprite.material) {
+            if (labelSprite.material.map) {
+                labelSprite.material.map.dispose();
+            }
+            labelSprite.material.dispose();
+        }
+        // Geometry is implicitly handled for Sprites
+    }
+
+    function projectPointsToPlane(points) {
+        // More robust plane calculation that finds the best-fit plane
+        if (points.length < 3) return [];
+        
+        // Find the normal of the best-fit plane
+        // For simplicity, we'll use the cross product of two edges
+        // A more robust solution would use PCA or SVD
+        const v1 = new THREE.Vector3().subVectors(points[1], points[0]);
+        const v2 = new THREE.Vector3().subVectors(points[2], points[0]);
+        const normal = new THREE.Vector3().crossVectors(v1, v2).normalize();
+        
+        // If the normal is close to zero, fall back to XY projection
+        if (normal.lengthSq() < 0.1) {
+            return points.map(p => new THREE.Vector2(p.x, p.y));
+        }
+        
+        // Find the most aligned world axis to project onto
+        const absX = Math.abs(normal.x);
+        const absY = Math.abs(normal.y);
+        const absZ = Math.abs(normal.z);
+        
+        let projectedPoints;
+        if (absZ >= absX && absZ >= absY) {
+            // Project onto XY plane
+            projectedPoints = points.map(p => new THREE.Vector2(p.x, p.y));
+        } else if (absY >= absX && absY >= absZ) {
+            // Project onto XZ plane
+            projectedPoints = points.map(p => new THREE.Vector2(p.x, p.z));
+        } else {
+            // Project onto YZ plane
+            projectedPoints = points.map(p => new THREE.Vector2(p.y, p.z));
+        }
+        
+        return projectedPoints;
+    }
+
+    function calculatePolygonArea(points2D) {
+        // Shoelace formula for polygon area
+        let area = 0;
+        for (let i = 0; i < points2D.length; i++) {
+            const j = (i + 1) % points2D.length;
+            area += points2D[i].x * points2D[j].y;
+            area -= points2D[j].x * points2D[i].y;
+        }
+        return Math.abs(area / 2);
+    }
+
+    function setReferenceScale(clickedLabel) {
+        const currentText = clickedLabel.userData.text;
+        const currentValue = parseFloat(currentText); // Extract numeric value
+
+        if (isNaN(currentValue) || !clickedLabel.userData.segmentStart || !clickedLabel.userData.segmentEnd) {
+            console.error("Invalid label data for scaling.");
+            return;
+        }
+
+        const newScaleInput = prompt(`Set reference distance for this segment (current: ${currentValue.toFixed(2)}):`, currentValue.toFixed(2));
+        if (newScaleInput === null) return; // User cancelled
+
+        const newReferenceValue = parseFloat(newScaleInput);
+        if (isNaN(newReferenceValue) || newReferenceValue <= 0) {
+            alert("Invalid reference distance. Please enter a positive number.");
+            return;
+        }
+
+        // Calculate the original Three.js distance for this segment
+        const originalDistance = clickedLabel.userData.segmentStart.distanceTo(clickedLabel.userData.segmentEnd);
+
+        if (originalDistance < 1e-6) {
+             alert("Cannot set scale based on a zero-length segment.");
+             return;
+        }
+
+        // Calculate the new global scale factor
+        scaleFactor = newReferenceValue / originalDistance;
+
+        console.log(`New scale factor set: ${scaleFactor}`);
+        updateAllMeasurementLabels(); // Update all existing labels
+    }
+
+    function updateAllMeasurementLabels() {
+        measurementGroup.children.forEach(child => {
+            if (child.userData.isDistanceLabel && child.userData.segmentStart && child.userData.segmentEnd) {
+                const originalDistance = child.userData.segmentStart.distanceTo(child.userData.segmentEnd);
+                const scaledDistance = originalDistance * scaleFactor;
+                const newText = scaledDistance.toFixed(2);
+                // Recreate label with new text (simplest way to update canvas texture)
+                const color = child.material.map.image.getContext('2d').fillStyle; // Attempt to get color (might be tricky)
+                const colorIndex = child.userData.colorIndex ?? 0; // Fallback color index
+                const newLabel = createDistanceLabel(newText, measurementColors[colorIndex]);
+                newLabel.position.copy(child.position);
+                newLabel.userData = { ...child.userData }; // Copy user data
+                newLabel.userData.text = newText; // Update text in user data
+
+                measurementGroup.remove(child);
+                disposeLabel(child);
+                measurementGroup.add(newLabel);
+
+            } else if (child.userData.isAreaLabel) {
+                // Find the corresponding sequence to recalculate area
+                // This requires better linking between area labels and sequences, difficult without storing sequence data on label
+                // Simple approach: Remove and let user recalculate area if scale changes significantly
+                 console.warn("Area label update after scaling not fully implemented. Please clear and remeasure area if needed.");
+                 // measurementGroup.remove(child);
+                 // disposeLabel(child);
+            }
+        });
+    }
+
+    function clearReferencePoints() {
+        if (confirm("Are you sure you want to clear ALL reference points? This cannot be undone.")) {
+            // Remove markers from the group and scene
+            while (markerGroup.children.length > 0) {
+                const marker = markerGroup.children[0];
+                // DragControls might hold references, dispose might be needed if issues arise
+                markerGroup.remove(marker);
+                // Dispose geometry/material if they were unique per marker (not the case here)
+            }
+            // Also clear measurements as they depend on points
+            clearMeasurements(false); // Don't ask for confirmation again
+            console.log("All reference points cleared.");
+        }
+    }
+
+    function clearMeasurements(askConfirmation = true) {
+         let confirmed = !askConfirmation;
+         if (askConfirmation) {
+             confirmed = confirm("Are you sure you want to clear ALL measurements? This cannot be undone.");
+         }
+
+        if (confirmed) {
+            // Remove lines and labels from the measurement group
+            const toRemove = [];
+            measurementGroup.children.forEach(child => {
+                 if (child.userData.isMeasurementLine || child.userData.isDistanceLabel || child.userData.isAreaLabel || child === previewLine) {
+                     toRemove.push(child);
+                 }
+            });
+
+            toRemove.forEach(child => {
+                measurementGroup.remove(child);
+                if (child.isLine) {
+                    child.geometry.dispose();
+                    child.material.dispose();
+                } else if (child.isSprite) {
+                    disposeLabel(child);
+                }
+            });
+
+            resetMeasurementState(); // Ensure state is idle
+            console.log("All measurements cleared.");
+        }
+    }
+
+    // Helper to clean up measurements if a point is deleted (basic version)
+    function cleanupMeasurementsForPoint(deletedMarker) {
+         // This is complex. A simple approach is to just clear all measurements
+         // if a point is deleted, as tracking dependencies is hard.
+         console.warn("Reference point deleted. Clearing all measurements for consistency.");
+         clearMeasurements(false); // Clear without confirmation
+    }
+
+    // --- Click-to-Spawn Reference Point Feature ---
+    // The redundant code has been removed (duplicate createCrossMarkerAtPosition function and other duplicated code)
   </script>
 </body>
 </html>
