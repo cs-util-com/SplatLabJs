@@ -592,10 +592,7 @@
             if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
                 const crossToRemove = intersectedObject.parent;
                 markerGroup.remove(crossToRemove);
-                // Also remove any measurements connected ONLY to this point (more complex, skip for now)
                 console.log("Reference Point removed by double-click.");
-                // Clean up associated measurements if needed (advanced)
-                cleanupMeasurementsForPoint(crossToRemove);
                 return; // Don't proceed to splat raycasting
             }
         }
@@ -1290,10 +1287,11 @@
 
     // Helper to clean up measurements if a point is deleted (basic version)
     function cleanupMeasurementsForPoint(deletedMarker) {
-         // This is complex. A simple approach is to just clear all measurements
-         // if a point is deleted, as tracking dependencies is hard.
-         console.warn("Reference point deleted. Clearing all measurements for consistency.");
-         clearMeasurements(false); // Clear without confirmation
+         // This function is no longer called when double-clicking a marker.
+         // It might still be relevant if the "Clear Reference Points" button behavior needs adjustment,
+         // but currently, that button also calls clearMeasurements directly.
+         console.warn("Reference point deleted. Measurements are NOT automatically cleared.");
+         // clearMeasurements(false); // Keep this commented out or remove if cleanup is never desired
     }
 
     // --- Click-to-Spawn Reference Point Feature ---

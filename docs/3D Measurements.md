@@ -6,6 +6,26 @@ This guide explains how to use the interactive 3D measurement tool. The process 
 1.  **Placing Reference Points:** Mark specific locations in the 3D scene. These points are persistent and can be used for various purposes.
 2.  **Creating Measurements:** Draw lines and calculate distances, path lengths, or areas by connecting previously placed reference points.
 
+## 2. Stage 1: Placing and Managing Reference Points
+
+### 2.1. Placing a Reference Point
+
+*   **Goal:** Mark a specific location in the 3D scene.
+*   **Action:** Aim the mouse at the desired location and **left-click**.
+*   **Result:** A reference point (3d cross) appears at the clicked location.
+
+### 2.2. Deleting a Reference Point
+
+*   **Goal:** Remove a single, unwanted reference point.
+*   **Action:** Aim the mouse at an existing reference point (3d cross) and **double-click**.
+*   **Result:** The selected reference point is removed from the scene. **This does *not* remove any measurement lines or labels that may have used this point.**
+
+### 2.3. Moving a Reference Point
+
+*   **Goal:** Change the position of an existing reference point.
+*   **Action:** Aim the mouse at the reference point, press and hold the **left mouse button**, drag the point to the new location, and release the button.
+*   **Result:** The reference point moves to the new location.
+
 ## 3. Stage 2: Creating Measurements between Reference Points
 
 Once you have placed reference points, you can create measurements between them.
@@ -84,23 +104,24 @@ Once you have placed reference points, you can create measurements between them.
 
 ### 3.10. Clearing Your Work
 
-*   **Goal:** Remove previously placed (points) or (measurement lines and labels).
+*   **Goal:** Remove previously placed points or measurement lines and labels.
 *   **Actions:**
-    *   Click the **"Clear Reference Points"** button: Removes *all* reference points. Does *not* remove measurement lines/labels. Asks for confirmation first.
-    *   Click the **"Clear Measurements"** button: Removes *all* colored lines and labels (distances, totals, areas). Does *not* remove the reference points. Asks for confirmation first.
+    *   Click the **"Clear Reference Points"** button: Removes *all* reference points from the scene. Measurement lines and labels remain untouched. Asks for confirmation first.
+    *   Click the **"Clear Measurements"** button: Removes *all* colored lines and labels (distances, totals, areas). Reference points remain untouched. Asks for confirmation first.
 *   **Result:** The selected items are removed from the scene. Any measurement currently in progress is cancelled.
 
 ## 4. Controls Summary
 
 *   **Place Reference Point:** Left-click on a surface (raycast hit)
+*   **Delete Reference Point:** Double-click on an existing Reference Point
 *   **Start Measurement / Add Point:** Left-click on an existing Reference Point
 *   **Axis Snap (while measuring, before next point):** Arrow Keys (Left=X, Right=Z, Up/Down=Y)
 *   **Set Scale:** Left-click on a segment distance label (when not measuring)
 *   **Remove Last Measurement Segment (while measuring):** Backspace / Delete
 *   **Finish Path Measurement (Open):** Enter / ESC (while measuring)
 *   **Finish Area Measurement (Closed):** Left-click on the *first* point of the current measurement (while measuring)
-*   **Clear All Points:** "Clear Reference Points" button
-*   **Clear All Measurements:** "Clear Measurements" button
+*   **Clear All Points:** "Clear Reference Points" button (Does not clear measurements)
+*   **Clear All Measurements:** "Clear Measurements" button (Does not clear points)
 
 ## 5. Visual Cues
 
