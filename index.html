@@ -124,10 +124,24 @@
     import * as GaussianSplats3D from 'gaussian-splats-3d';
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { DragControls } from 'three/addons/controls/DragControls.js';
 
     let scene, camera, renderer, controls, dropInViewer;
     // Add references for FOV controls
     let fovSlider, fovValueDisplay;
+    // Add variables for DragControls and drag state
+    let dragControls;
+    let draggedObject = null;
+    let dragAxis = null;
+    let initialPosition = new THREE.Vector3();
+    const dragPlane = new THREE.Plane();
+    const dragRaycaster = new THREE.Raycaster();
+    const dragIntersection = new THREE.Vector3();
+    const dragOffset = new THREE.Vector3(); // To store initial offset on the plane
+    // Declare markerGroup here so it's accessible within initThree scope before DragControls
+    let markerGroup; 
+    // Add variable to store current mouse NDC
+    const currentMouseNDC = new THREE.Vector2();
 
     function initThree() {
         const container = document.getElementById('renderer-container');
@@ -145,6 +159,13 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         container.appendChild(renderer.domElement);
+
+        // Add pointermove listener to track mouse position
+        renderer.domElement.addEventListener('pointermove', (event) => {
+            // Calculate normalized device coordinates (-1 to +1)
+            currentMouseNDC.x = (event.clientX / window.innerWidth) * 2 - 1;
+            currentMouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }, false);
 
         // Controls
         controls = new OrbitControls(camera, renderer.domElement);
@@ -169,6 +190,11 @@
              'sphericalHarmonicsDegree': 2 // Initialize with max SH degree support
         });
         scene.add(dropInViewer); // Add viewer to the scene
+
+        // --- Marker Group Initialization (Moved Earlier) ---
+        // Create a group to hold all marker spheres
+        markerGroup = new THREE.Group(); // Assign to the outer scope variable
+        scene.add(markerGroup); // Add the group to the scene
 
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
@@ -208,6 +234,117 @@
             camera.updateProjectionMatrix();
             fovValueDisplay.textContent = newFov;
         });
+
+        // Initialize DragControls after markerGroup is added to the scene
+        // Pass markerGroup.children, camera, and renderer.domElement
+        // Note: DragControls modifies the passed array, so using markerGroup.children directly works.
+        dragControls = new DragControls(markerGroup.children, camera, renderer.domElement);
+        dragControls.enabled = true; // Ensure it's enabled
+
+        // --- DragControls Event Listeners ---
+
+        dragControls.addEventListener('dragstart', function (event) {
+            const object = event.object; // This is the clicked mesh (crossMeshX, Y, or Z)
+            if (!object.parent || !object.parent.isGroup) return; // Ensure it's part of a cross marker
+
+            console.log("Drag Start:", object.name);
+            controls.enabled = false; // Disable OrbitControls during drag
+            draggedObject = object.parent; // Store the parent group (the whole cross)
+            initialPosition.copy(draggedObject.position); // Store initial position
+
+            // Determine the axis based on the clicked mesh's name
+            switch (object.name) {
+                case 'crossX':
+                    dragAxis = new THREE.Vector3(1, 0, 0); // Local X
+                    break;
+                case 'crossY':
+                    dragAxis = new THREE.Vector3(0, 1, 0); // Local Y
+                    break;
+                case 'crossZ':
+                    dragAxis = new THREE.Vector3(0, 0, 1); // Local Z
+                    break;
+                default:
+                    dragAxis = null;
+                    draggedObject = null;
+                    controls.enabled = true; // Re-enable if not a valid part
+                    return;
+            }
+
+            // Create a plane perpendicular to the camera view, passing through the object's center
+            const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
+            dragPlane.setFromNormalAndCoplanarPoint(cameraDirection, initialPosition);
+
+            // Raycast to find the initial intersection point on the plane
+            if (event.domEvent) { // Check if there's a valid DOM event with clientX and clientY
+                const mouse = new THREE.Vector2(
+                    (event.domEvent.clientX / window.innerWidth) * 2 - 1,
+                    -(event.domEvent.clientY / window.innerHeight) * 2 + 1
+                );
+                dragRaycaster.setFromCamera(mouse, camera);
+                if (dragRaycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
+                    // This is the key change - we calculate dragOffset as the vector from
+                    // the intersection point to the object's center
+                    dragOffset.subVectors(initialPosition, dragIntersection);
+                    console.log("Initial plane intersection:", dragIntersection);
+                } else {
+                    console.warn("Could not intersect drag plane on dragstart.");
+                    dragOffset.set(0,0,0);
+                }
+            } else {
+                // Fallback if no valid dom event
+                dragRaycaster.setFromCamera(currentMouseNDC, camera);
+                if (dragRaycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
+                    dragOffset.subVectors(initialPosition, dragIntersection);
+                } else {
+                    console.warn("Could not intersect drag plane on dragstart using NDC.");
+                    dragOffset.set(0,0,0);
+                }
+            }
+            
+            // Reset the child object's position to prevent its own movement
+            event.object.position.set(0, 0, 0);
+        });
+
+        dragControls.addEventListener('drag', function (event) {
+            if (!draggedObject || !dragAxis) return;
+
+            // Raycast from current mouse position (using tracked NDC) to the drag plane
+            dragRaycaster.setFromCamera(currentMouseNDC, camera); // Use tracked mouse position
+
+            if (dragRaycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
+                // Add the stored offset to get the new position
+                // This preserves the original click offset from the center
+                const targetPointOnPlane = dragIntersection.clone().add(dragOffset);
+                
+                // Calculate the displacement vector on the plane
+                const displacementOnPlane = targetPointOnPlane.clone().sub(initialPosition);
+
+                // Get the world-space direction of the selected local axis
+                const worldAxis = dragAxis.clone().applyQuaternion(draggedObject.quaternion).normalize();
+
+                // Project the displacement vector onto the world axis
+                const projectedDisplacement = worldAxis.clone().multiplyScalar(displacementOnPlane.dot(worldAxis));
+
+                // Update the parent object's position
+                draggedObject.position.copy(initialPosition).add(projectedDisplacement);
+
+                // Reset the position of the actually dragged child mesh relative to its parent
+                event.object.position.set(0, 0, 0); 
+            }
+        });
+
+        dragControls.addEventListener('dragend', function (event) {
+            console.log("Drag End");
+            if (draggedObject) { // Only re-enable if a drag actually happened
+                 controls.enabled = true;
+            }
+            // Clear state
+            draggedObject = null;
+            dragAxis = null;
+            initialPosition.set(0,0,0);
+            dragOffset.set(0,0,0);
+        });
+
 
         // Handle window resize
         window.addEventListener('resize', onWindowResize, false);
@@ -335,10 +472,6 @@
 
     // --- Click-to-Spawn Sphere Feature ---
 
-    // Create a group to hold all marker spheres
-    const markerGroup = new THREE.Group(); // Renamed from sphereGroup
-    scene.add(markerGroup); // Add the group to the scene
-
     // --- Define materials and geometry for the cross marker ---
     const baseCrossSize = 0.2; // Base size of the cross arms at reference distance
     const crossThicknessRatio = 0.1; // Thickness relative to size
@@ -358,21 +491,27 @@
         const currentCrossThickness = currentCrossSize * crossThicknessRatio;
 
         // Create geometry with the calculated size
-        const dynamicCrossGeometry = new THREE.BoxGeometry(currentCrossSize, currentCrossThickness, currentCrossThickness);
+        // Use separate geometries for each arm to allow individual clicking
+        const dynamicCrossGeometryX = new THREE.BoxGeometry(currentCrossSize, currentCrossThickness, currentCrossThickness);
+        const dynamicCrossGeometryY = new THREE.BoxGeometry(currentCrossThickness, currentCrossSize, currentCrossThickness); // Adjusted for Y axis
+        const dynamicCrossGeometryZ = new THREE.BoxGeometry(currentCrossThickness, currentCrossThickness, currentCrossSize); // Adjusted for Z axis
+
 
         const crossGroup = new THREE.Group();
 
         // X-axis arm (Red)
-        const crossMeshX = new THREE.Mesh(dynamicCrossGeometry, crossMaterialX);
-        // No rotation needed
+        const crossMeshX = new THREE.Mesh(dynamicCrossGeometryX, crossMaterialX);
+        crossMeshX.name = 'crossX'; // Assign name
 
-        // Y-axis arm (Green) - Use cloned geometry to avoid issues if needed, though BoxGeometry is simple
-        const crossMeshY = new THREE.Mesh(dynamicCrossGeometry.clone(), crossMaterialY);
-        crossMeshY.rotation.z = Math.PI / 2; // Rotate 90 degrees around Z
+        // Y-axis arm (Green)
+        const crossMeshY = new THREE.Mesh(dynamicCrossGeometryY, crossMaterialY);
+        // No rotation needed due to adjusted geometry
+        crossMeshY.name = 'crossY'; // Assign name
 
         // Z-axis arm (Blue)
-        const crossMeshZ = new THREE.Mesh(dynamicCrossGeometry.clone(), crossMaterialZ);
-        crossMeshZ.rotation.y = Math.PI / 2; // Rotate 90 degrees around Y
+        const crossMeshZ = new THREE.Mesh(dynamicCrossGeometryZ, crossMaterialZ);
+        // No rotation needed due to adjusted geometry
+        crossMeshZ.name = 'crossZ'; // Assign name
 
         crossGroup.add(crossMeshX);
         crossGroup.add(crossMeshY);
@@ -384,9 +523,11 @@
 
         console.log(`Cross marker added at: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)} with scale factor ${scaleFactor.toFixed(2)} (dist: ${distance.toFixed(2)})`);
 
-        // Dispose of dynamic geometry if it's unique per marker to free memory
-        dynamicCrossGeometry.dispose();
-        // Note: Cloned geometries might also need disposal if complex, but BoxGeometry is okay.
+        // Dispose of dynamic geometry
+        dynamicCrossGeometryX.dispose();
+        dynamicCrossGeometryY.dispose();
+        dynamicCrossGeometryZ.dispose();
+        // Note: DragControls automatically updates its list when children are added to markerGroup
     }
 
 
@@ -410,7 +551,28 @@
             return;
         }
 
-        console.log("Double-click detected.");
+        // Check if the double-click hit an existing marker arm
+        // Use the dragRaycaster for this check
+        const mouse = new THREE.Vector2(
+            (event.clientX / window.innerWidth) * 2 - 1,
+            -(event.clientY / window.innerHeight) * 2 + 1
+        );
+        dragRaycaster.setFromCamera(mouse, camera);
+        const intersects = dragRaycaster.intersectObjects(markerGroup.children, true); // Check recursively
+
+        if (intersects.length > 0) {
+            // Check if the first intersected object is one of the cross arms
+            const intersectedName = intersects[0].object.name;
+            if (intersectedName === 'crossX' || intersectedName === 'crossY' || intersectedName === 'crossZ') {
+                console.log("Double-click hit an existing marker arm. Preventing new marker creation.");
+                // Optionally, you could trigger the drag start here if desired,
+                // but DragControls handles the mousedown internally.
+                return; // Don't proceed to splat raycasting
+            }
+        }
+
+
+        console.log("Double-click detected (not on marker). Raycasting splats...");
 
         // Access the internal raycaster from the viewer instance
         const internalRaycaster = dropInViewer?.viewer?.raycaster;
