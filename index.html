@@ -1266,8 +1266,6 @@
                 markerGroup.remove(marker);
                 // Dispose geometry/material if they were unique per marker (not the case here)
             }
-            // Also clear measurements as they depend on points
-            clearMeasurements(false); // Don't ask for confirmation again
             console.log("All reference points cleared.");
         }
     }
