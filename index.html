@@ -562,11 +562,25 @@
 
         if (intersects.length > 0) {
             // Check if the first intersected object is one of the cross arms
-            const intersectedName = intersects[0].object.name;
+            const intersectedObject = intersects[0].object;
+            const intersectedName = intersectedObject.name;
             if (intersectedName === 'crossX' || intersectedName === 'crossY' || intersectedName === 'crossZ') {
-                console.log("Double-click hit an existing marker arm. Preventing new marker creation.");
-                // Optionally, you could trigger the drag start here if desired,
-                // but DragControls handles the mousedown internally.
+                // --- Modification Start ---
+                // Get the parent group (the cross marker)
+                const crossToRemove = intersectedObject.parent;
+                if (crossToRemove && crossToRemove.isGroup) {
+                    // Remove the entire cross marker group from the main marker group
+                    markerGroup.remove(crossToRemove);
+                    console.log("Cross marker removed.");
+
+                    // Optional: Dispose geometry/material if they were unique per marker
+                    // In this case, materials are shared, and geometry was disposed on creation.
+                    // Removing from the group is usually sufficient for garbage collection.
+                } else {
+                     console.warn("Could not find parent group to remove for:", intersectedName);
+                }
+                // --- Modification End ---
+
                 return; // Don't proceed to splat raycasting
             }
         }
