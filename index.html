@@ -1,147 +1,465 @@
-<!-- User Stories & Requirements for the code below:
-
-- This is a template for a single-page HTML web app.
-- A monospace font should be used.
-- No backend; all data is stored locally.
-
-Main user stories:
-- ...
-
-Keep this comment block in the code.
-Simplify the code if possible (without removing the functionality described above). 
-You MUST keep all comments in the code below, even if you think they are redundant.
-Always respond with the full new html file (including these comments here), 
-additional explanations what you change are nice to have but not necessary. 
--->
-
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Decoupled Modules Example with Person Class</title>
-  <!-- Favicon: A white box --> <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23fff'/%3E%3C/svg%3E" type="image/svg+xml">
-  <!-- Added Tailwind CSS via CDN -->
+  <meta http-equiv="x-ua-compatible" content="ie=edge">
+  <title>3D Gaussian Splat Viewer</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    @view-transition {
-      navigation: auto;
+    body {
+        background-color: #000; /* Default background for Three.js */
+        overflow: hidden; /* Prevent scrollbars */
     }
-    
-    nav a[aria-current="page"]:after {
-      border-color: white;
-      view-transition-name: posts-nav;
+    #renderer-container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 0; /* Behind the UI panel */
     }
-    
-    /* Old stuff going out */
-    ::view-transition-old(posts-nav) {
-      animation: fade 0.2s linear forwards;
-      height: 100%;
+    #container {
+        position: absolute; /* Changed from relative */
+        top: 10px; /* Position from top */
+        left: 10px; /* Position from left */
+        z-index: 1; /* Above the renderer */
+        pointer-events: none; /* Allow clicks to pass through container */
     }
-    
-    /* New stuff coming in */
-    ::view-transition-new(posts-nav) {
-      animation: fade 0.3s linear reverse;
-      height: 100%;
+    #view-panel {
+        pointer-events: auto; /* Re-enable pointer events for the panel itself */
+        background-color: rgba(243, 244, 246, 0.9); /* bg-gray-100 with opacity */
+        display: inline-block; /* Make panel fit content */
     }
-    
-    @keyframes fade {
-      from { opacity: 1; }
-      to { opacity: 0; }
+    /* Minimal styles for loading icon if needed before Tailwind loads or for custom animations */
+    .loading-icon {
+        width: 35px;
+        margin: 10px auto;
+        background: #324d70; /* Tailwind bg-blue-800 */
+        aspect-ratio: 1;
+        border-radius: 50%;
+        --_m:
+            conic-gradient(#0000,#000),
+            linear-gradient(#000 0 0) content-box;
+        -webkit-mask: var(--_m);
+            mask: var(--_m);
+        -webkit-mask-composite: source-out;
+            mask-composite: subtract;
+        box-sizing: border-box;
+        animation: ply-load 1s linear infinite;
+    }
+
+    @keyframes ply-load {
+        to{transform: rotate(1turn)}
+    }
+    .file-ext, .file-ext-small {
+        border: 1px solid #bababa; /* Tailwind border-gray-300 */
+        border-radius: 3px; /* Tailwind rounded-sm */
+        background-color: #e6e6e6; /* Tailwind bg-gray-200 */
+        padding: 1px 4px;
+        margin: 0 2px;
+        font-size: 0.875rem; /* Tailwind text-sm */
+        display: inline-block;
+    }
+    .file-ext-small {
+         background-color: #dfdfdf; /* Tailwind bg-gray-100 */
+         padding-bottom: 1px;
     }
   </style>
-  <script>
-    // Only use if browser supports View Transitions
-    if (document.startViewTransition) {
-      window.addEventListener('click', (e) => {
-        // Only handle internal links
-        if (e.target.tagName === 'A' && e.target.origin === window.location.origin) {
-          e.preventDefault();
-          document.startViewTransition(() => {
-            window.location.href = e.target.href;
-          });
+  <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+            "gaussian-splats-3d": "./lib/gaussian-splats-3d.module.js"
         }
-      });
     }
   </script>
 </head>
-<body class="font-mono p-8 bg-gray-50">
-  <div class="max-w-4xl mx-auto">
-    <header class="mb-8">
-      <h1 class="text-3xl font-bold text-blue-600 mb-4">Template Web App</h1>
-      <nav class="bg-blue-600 text-white p-4 rounded-lg mb-4">
-        <a href="index.html" class="mr-6 hover:underline font-bold relative" aria-current="page">
-          Home
-          <span class="absolute bottom-0 left-0 w-full h-0.5 bg-white"></span>
-        </a>
-        <a href="features.html" class="mr-6 hover:underline">Features</a>
-        <a href="about.html" class="hover:underline">About</a>
-      </nav>
-      <div class="bg-blue-100 border-l-4 border-blue-500 p-4 mb-6">
-        <p class="text-sm text-blue-700">This is a Tailwind CSS demonstration with modular JavaScript.</p>
-      </div>
-    </header>
-    
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-      <!-- Card 1 -->
-      <div class="bg-white p-6 rounded-lg shadow-md">
-        <h2 class="text-xl font-bold mb-4 text-gray-800">Greeting Card</h2>
-        <p class="text-gray-600 mb-4">Click the button below to greet the person.</p>
-        <button id="greetBtn" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline transition duration-300">
-          Greet
-        </button>
-      </div>
-      
-      <!-- Card 2 -->
-      <div class="bg-white p-6 rounded-lg shadow-md">
-        <h2 class="text-xl font-bold mb-4 text-gray-800">Tailwind Features</h2>
-        <ul class="list-disc pl-5 space-y-2 text-gray-600">
-          <li>Responsive design with <span class="font-bold text-blue-500">breakpoints</span></li>
-          <li>Utility-first CSS framework</li>
-          <li>Customizable with configuration</li>
-        </ul>
-        <div class="mt-4">
-          <div class="flex gap-2">
-            <span class="bg-red-200 text-red-800 text-xs p-1 rounded">Tag</span>
-            <span class="bg-green-200 text-green-800 text-xs p-1 rounded">Utility</span>
-            <span class="bg-yellow-200 text-yellow-800 text-xs p-1 rounded">Responsive</span>
-          </div>
+
+<body class="h-screen m-0 font-sans text-base">
+  <!-- UI Panel -->
+  <div id="container"> <!-- Removed flex classes -->
+    <div id ="view-panel" class="p-3 text-gray-900 rounded-lg border border-gray-300 w-auto text-center shadow-lg"> <!-- Adjusted padding, width, text-align -->
+        <div class="flex flex-col space-y-2"> <!-- Use flex column for layout -->
+            <label for="viewFile" class="inline-block" title="Load .ply, .ksplat, .splat, .spz">
+                <span class="text-blue-800 border border-blue-300 bg-blue-100 hover:bg-blue-200 hover:border-blue-500 hover:text-blue-900 py-1 px-3 rounded-md shadow-md cursor-pointer mx-auto block w-full">Add .ply, .ksplat, .splat, .spz</span>
+                <input type="file" id="viewFile" class="hidden" onchange="window.onFileChange(this)"> <!-- Removed fileNameLabelID argument -->
+            </label>
+            <div class="flex items-center justify-center space-x-3"> <!-- Flex row for inputs -->
+                 <div class="flex items-center space-x-1">
+                     <label for="alphaRemovalThresholdView" class="text-sm text-gray-600">Alpha (1-255):</label>
+                     <input id="alphaRemovalThresholdView" type="text" class="border border-gray-400 bg-white p-1 rounded-md w-12 text-sm" value="1" placeholder="1-255">
+                 </div>
+                 <div class="flex items-center space-x-1">
+                     <label for="viewSphericalHarmonicsDegree" class="text-sm text-gray-600">SH:</label>
+                     <!-- Replace input with select -->
+                     <select id="viewSphericalHarmonicsDegree" class="border border-gray-400 bg-white p-1 rounded-md text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" style="padding-right: 1.5rem; background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2020%2020%22%20fill%3D%22currentColor%22%3E%3Cpath%20fill-rule%3D%22evenodd%22%20d%3D%22M5.293%207.293a1%201%200%20011.414%200L10%2010.586l3.293-3.293a1%201%200%20111.414%201.414l-4%204a1%201%200%2001-1.414%200l-4-4a1%201%200%20010-1.414z%22%20clip-rule%3D%22evenodd%22%2F%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right 0.5rem center; background-size: 1em 1em;">
+                         <option value="0" selected>0</option>
+                         <option value="1">1</option>
+                         <option value="2">2</option>
+                     </select>
+                 </div>
+            </div>
+            <!-- Add Rotation Checkbox -->
+            <div class="flex items-center justify-center space-x-1 mt-1">
+                <input type="checkbox" id="rotateSplatCheckbox" class="form-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" checked>
+                <label for="rotateSplatCheckbox" class="ml-2 text-sm text-gray-600">Rotate 180° (X-axis)</label>
+            </div>
+            <!-- Add Camera FOV Control -->
+            <div class="flex items-center justify-center space-x-1 mt-1 border-t pt-2 border-gray-300">
+                <label for="fovSlider" class="text-sm text-gray-600 whitespace-nowrap">FOV:</label>
+                <input type="range" id="fovSlider" min="1" max="120" value="75" step="1" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 mx-2">
+                <span id="fovValue" class="text-sm text-gray-600 w-8 text-right">75</span>
+            </div>
         </div>
-      </div>
-    </div>
-    
-    <div class="bg-white p-6 rounded-lg shadow">
-      <h2 class="text-xl font-bold mb-4 text-gray-800">Interactive Components</h2>
-      <div class="mb-4">
-        <label class="block text-gray-700 text-sm font-bold mb-2" for="username">
-          Username
-        </label>
-        <input class="w-full p-2 border rounded text-gray-700 focus:outline-none focus:shadow-outline" id="username" type="text" placeholder="Username">
-      </div>
-      <div class="flex justify-between">
-        <button class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none transition">
-          Save
-        </button>
-        <button class="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded focus:outline-none transition">
-          Cancel
-        </button>
-      </div>
     </div>
   </div>
-  
-  <!-- Load the main module -->
+
+  <!-- Three.js Renderer Container -->
+  <div id="renderer-container"></div>
+
   <script type="module">
+    import * as GaussianSplats3D from 'gaussian-splats-3d';
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-    import { tellBirthday } from './utils.js';
-    import { Person } from './person.js';
+    let scene, camera, renderer, controls, dropInViewer;
+    // Add references for FOV controls
+    let fovSlider, fovValueDisplay;
 
-    // Create a new Person instance with values defined in the HTML.
-    const person = new Person('Alice', 40);
-    document.getElementById('greetBtn').addEventListener('click', () => {
-      alert(tellBirthday(person));
-    });
+    function initThree() {
+        const container = document.getElementById('renderer-container');
+
+        // Scene
+        scene = new THREE.Scene();
+
+        // Camera
+        const initialFov = 75; // Store initial FOV
+        camera = new THREE.PerspectiveCamera(initialFov, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 0, 5); // Default position
+
+        // Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        // Controls
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true; // Optional damping effect
+        controls.target.set(0, 0, 0); // Set initial lookAt
+        controls.update();
+
+        // Axes Helper
+        const axesHelper = new THREE.AxesHelper( 5 ); // Length of 5 units
+        scene.add( axesHelper );
+
+        // Grid Helper
+        const size = 10; // Size of the grid (e.g., 10x10 units)
+        const divisions = 10; // Number of divisions within the grid
+        const gridHelper = new THREE.GridHelper( size, divisions );
+        scene.add( gridHelper );
+
+        // DropInViewer - Initialize with SH degree 2 (max) to support loading files up to SH 2
+        dropInViewer = new GaussianSplats3D.DropInViewer({
+             'sharedMemoryForWorkers': false,
+             'gpuAcceleratedSort': false,
+             'sphericalHarmonicsDegree': 2 // Initialize with max SH degree support
+        });
+        scene.add(dropInViewer); // Add viewer to the scene
+
+        // Get FOV UI elements
+        fovSlider = document.getElementById('fovSlider');
+        fovValueDisplay = document.getElementById('fovValue');
+
+        // Set initial FOV display
+        fovValueDisplay.textContent = initialFov;
+        fovSlider.value = initialFov;
+
+        // Add FOV slider event listener
+        fovSlider.addEventListener('input', () => {
+            const newFov = parseInt(fovSlider.value);
+
+            // Calculate distance adjustment to maintain apparent size at target
+            const currentDistance = camera.position.distanceTo(controls.target);
+            const currentFovRad = THREE.MathUtils.degToRad(camera.fov);
+            const newFovRad = THREE.MathUtils.degToRad(newFov);
+
+            // Avoid division by zero/very small numbers if tan(newFovRad / 2) is close to zero
+            const tanNewFovHalf = Math.tan(newFovRad / 2);
+            if (tanNewFovHalf > 1e-6) { // Check against a small epsilon
+                const newDistance = currentDistance * (Math.tan(currentFovRad / 2) / tanNewFovHalf);
+
+                // Calculate direction and new position
+                const direction = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+                const newPosition = new THREE.Vector3().copy(controls.target).addScaledVector(direction, newDistance);
+
+                // Update camera position first
+                camera.position.copy(newPosition);
+            } else {
+                 console.warn("FOV too small, cannot adjust distance effectively.");
+            }
+
+
+            // Update camera FOV
+            camera.fov = newFov;
+            camera.updateProjectionMatrix();
+            fovValueDisplay.textContent = newFov;
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', onWindowResize, false);
+
+        // Start animation loop
+        animate();
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update(); // Update controls
+        renderer.render(scene, camera);
+    }
+
+    // Initialize Three.js setup on load
+    initThree();
+
+    // --- Splat Loading Logic ---
+
+    // Pass SH degree to loaders that support it
+    function fileBufferToSplatBuffer(fileBufferData, format, alphaRemovalThreshold, outSphericalHarmonicsDegree) {
+      const optimize = false;
+      const compressionLevel = 0;
+      // Use outSphericalHarmonicsDegree passed from UI
+      if (format === GaussianSplats3D.SceneFormat.Ply) {
+        return GaussianSplats3D.PlyLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, outSphericalHarmonicsDegree, undefined, undefined, undefined, undefined);
+      } else if (format === GaussianSplats3D.SceneFormat.Splat) {
+        // SplatLoader doesn't take SH degree as input, it's determined by the file
+        return GaussianSplats3D.SplatLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, undefined, undefined, undefined, undefined);
+      } else if (format === GaussianSplats3D.SceneFormat.KSplat) {
+        // KSplatLoader doesn't take SH degree as input
+        return GaussianSplats3D.KSplatLoader.loadFromFileData(fileBufferData.data);
+      } else if (format === GaussianSplats3D.SceneFormat.Spz) {
+        // SpzLoader takes SH degree as input
+        return GaussianSplats3D.SpzLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, outSphericalHarmonicsDegree, undefined, undefined, undefined, undefined);
+      } else {
+        return Promise.reject(`Unsupported file format: ${format}`);
+      }
+    }
+
+    // Assign functions to window object to make them accessible from inline HTML event handlers
+    window.onFileChange = function(arg) {
+      const viewFile = document.getElementById("viewFile");
+
+      if (!arg || !arg.files || arg.files.length === 0) {
+          return;
+      }
+
+      const alphaRemovalThreshold = parseInt(document.getElementById("alphaRemovalThresholdView").value);
+      // Read sphericalHarmonicsDegree input reading from select element
+      const sphericalHarmonicsDegree = parseInt(document.getElementById("viewSphericalHarmonicsDegree").value);
+      // Read rotation checkbox state
+      const rotateSplat = document.getElementById("rotateSplatCheckbox").checked;
+
+      // Validation
+      if (isNaN(alphaRemovalThreshold) || alphaRemovalThreshold < 0 || alphaRemovalThreshold > 255) {
+        console.error("Invalid alpha removal threshold (0-255).");
+        return;
+      }
+
+      const viewFileName = viewFile.files[0].name.trim();
+      const format = GaussianSplats3D.LoaderUtils.sceneFormatFromPath(viewFileName);
+
+      if (format === undefined) {
+          console.error("Could not determine file format. Ensure file has a .ply, .splat, .ksplat, or .spz extension.");
+          return;
+      }
+
+      try {
+        const fileReader = new FileReader();
+        fileReader.onload = function(){
+          console.log("Processing file...");
+          setTimeout(() => { // Keep setTimeout for UI responsiveness during parse
+              try {
+                // Pass alpha threshold and SH degree
+                const splatBufferPromise = fileBufferToSplatBuffer({data: fileReader.result}, format, alphaRemovalThreshold, sphericalHarmonicsDegree);
+
+                splatBufferPromise.then((splatBuffer) => {
+                    // Prepare options for adding the buffer
+                    const splatBufferOptions = {
+                        'splatAlphaRemovalThreshold': alphaRemovalThreshold,
+                        // SH degree is inherent in the loaded splatBuffer, not needed here
+                    };
+
+                    // Access the internal viewer and use its addSplatBuffers method
+                    // Set replaceExisting to false to additively load splats
+                    dropInViewer.viewer.addSplatBuffers([splatBuffer], [splatBufferOptions], true, false, false, false) // Changed replaceExisting to false
+                        .then(() => {
+                            console.log("Splat buffer added via internal viewer.");
+                            // Apply rotation to the Three.js object if checked
+                            if (rotateSplat && dropInViewer.viewer.splatMesh) {
+                                console.log("Applying 180-degree Y rotation to splat mesh...");
+                                // Rotate the splatMesh object directly
+                                dropInViewer.viewer.splatMesh.rotation.x += Math.PI; // Add 180 degrees (PI radians)
+                                console.log("Rotation applied to mesh.");
+                            }
+                        })
+                        .catch((e) => {
+                            console.error("Error adding splat buffer via internal viewer:", e);
+                        });
+                })
+                .catch((e) => {
+                    console.error("Error creating splat buffer:", e);
+                });
+              } catch (e) {
+                console.error("Could not process scene: " + e.message);
+              }
+          }, 10);
+        }
+        fileReader.onerror = function() {
+            console.error("Error reading file.");
+        }
+        console.log("Loading file...");
+        fileReader.readAsArrayBuffer(viewFile.files[0]);
+      } catch (e) {
+        console.error("Could not load scene: " + e.message);
+      }
+    }
+
+    // --- Click-to-Spawn Sphere Feature ---
+
+    // Create a group to hold all marker spheres
+    const markerGroup = new THREE.Group(); // Renamed from sphereGroup
+    scene.add(markerGroup); // Add the group to the scene
+
+    // --- Define materials and geometry for the cross marker ---
+    const baseCrossSize = 0.2; // Base size of the cross arms at reference distance
+    const crossThicknessRatio = 0.1; // Thickness relative to size
+    // Geometry will be created dynamically based on scale
+
+    const crossMaterialX = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red for X
+    const crossMaterialY = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); // Green for Y
+    const crossMaterialZ = new THREE.MeshBasicMaterial({ color: 0x0000ff }); // Blue for Z
+
+    // Function to create a cross marker at the hit position, scaled by distance
+    function createCrossMarkerAtPosition(position, cameraPosition) {
+        const distance = position.distanceTo(cameraPosition);
+        const referenceDistance = 5.0; // Adjust as needed - distance at which base size is used
+        const scaleFactor = (distance / referenceDistance); // Scale proportionally to distance
+
+        const currentCrossSize = baseCrossSize * scaleFactor;
+        const currentCrossThickness = currentCrossSize * crossThicknessRatio;
+
+        // Create geometry with the calculated size
+        const dynamicCrossGeometry = new THREE.BoxGeometry(currentCrossSize, currentCrossThickness, currentCrossThickness);
+
+        const crossGroup = new THREE.Group();
+
+        // X-axis arm (Red)
+        const crossMeshX = new THREE.Mesh(dynamicCrossGeometry, crossMaterialX);
+        // No rotation needed
+
+        // Y-axis arm (Green) - Use cloned geometry to avoid issues if needed, though BoxGeometry is simple
+        const crossMeshY = new THREE.Mesh(dynamicCrossGeometry.clone(), crossMaterialY);
+        crossMeshY.rotation.z = Math.PI / 2; // Rotate 90 degrees around Z
+
+        // Z-axis arm (Blue)
+        const crossMeshZ = new THREE.Mesh(dynamicCrossGeometry.clone(), crossMaterialZ);
+        crossMeshZ.rotation.y = Math.PI / 2; // Rotate 90 degrees around Y
+
+        crossGroup.add(crossMeshX);
+        crossGroup.add(crossMeshY);
+        crossGroup.add(crossMeshZ);
+
+        // No need to scale the group, as geometry size is dynamic
+        crossGroup.position.copy(position);
+        markerGroup.add(crossGroup); // Add to the main marker group
+
+        console.log(`Cross marker added at: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)} with scale factor ${scaleFactor.toFixed(2)} (dist: ${distance.toFixed(2)})`);
+
+        // Dispose of dynamic geometry if it's unique per marker to free memory
+        dynamicCrossGeometry.dispose();
+        // Note: Cloned geometries might also need disposal if complex, but BoxGeometry is okay.
+    }
+
+
+    // --- Raycaster Setup and Click Handling ---
+    const outHits = []; // Array to store intersection results
+    const renderDimensions = new THREE.Vector2(); // To store canvas dimensions
+
+    // ADD dblclick listener
+    renderer.domElement.addEventListener('dblclick', onDoubleClick, false);
+
+    // ADD onDoubleClick function
+    function onDoubleClick(event) {
+        // Prevent default double-click behavior (e.g., text selection)
+        event.preventDefault();
+
+        // Check if the click is on the UI panel.
+        const containerRect = document.getElementById('container').getBoundingClientRect();
+        if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
+            event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
+            // Click is inside the UI panel, do nothing here.
+            return;
+        }
+
+        console.log("Double-click detected.");
+
+        // Access the internal raycaster from the viewer instance
+        const internalRaycaster = dropInViewer?.viewer?.raycaster;
+
+        if (!internalRaycaster || !dropInViewer.viewer.splatMesh || dropInViewer.viewer.splatMesh.getSplatCount() === 0) {
+            console.log("No splats loaded, splat mesh not ready, or internal raycaster not found.");
+            return; // Don't raycast if no splats are loaded or raycaster isn't available
+        }
+
+        // Calculate mouse position relative to the canvas
+        const rect = renderer.domElement.getBoundingClientRect();
+        const screenPosition = new THREE.Vector2(
+            event.clientX - rect.left,
+            event.clientY - rect.top
+        );
+
+        // Get current render dimensions
+        renderer.getSize(renderDimensions);
+
+        // Reset hits array
+        outHits.length = 0;
+
+        // Set up the raycaster from the camera and screen position
+        // Note: We use setFromCameraAndScreenPosition for the gaussian-splats-3d raycaster
+        internalRaycaster.setFromCameraAndScreenPosition(camera, screenPosition, renderDimensions);
+
+        // Perform the intersection test against the splat mesh
+        internalRaycaster.intersectSplatMesh(dropInViewer.viewer.splatMesh, outHits);
+
+        // If we hit one or more splats
+        if (outHits.length > 0) {
+            // The first hit (outHits[0]) is usually the closest one
+            const hit = outHits[0];
+            const hitPosition = hit.origin; // hit.origin is the intersection point in world space
+
+            console.log("Splat hit at:", hitPosition);
+
+            // Center the camera controls on the hit point
+            controls.target.copy(hitPosition);
+            controls.update(); // Apply the target change immediately
+
+            // Create the cross marker at the hit position, passing camera position for scaling
+            createCrossMarkerAtPosition(hitPosition, camera.position); // Pass camera position
+
+        } else {
+            console.log("No splat hit on double-click.");
+        }
+    }
 
   </script>
-
 </body>
 </html>
