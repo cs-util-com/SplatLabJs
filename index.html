@@ -132,6 +132,16 @@
                  <button id="clearPointsButton" class="text-xs bg-red-100 hover:bg-red-200 text-red-800 border border-red-300 hover:border-red-500 py-1 px-2 rounded shadow-sm">Clear Points</button>
                  <button id="clearMeasurementsButton" class="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-800 border border-yellow-300 hover:border-yellow-500 py-1 px-2 rounded shadow-sm">Clear Measures</button>
             </div>
+            <!-- Transform Mode Toggle Button -->
+            <div class="border-t pt-2 mt-2 border-gray-300 flex justify-center">
+                 <button id="toggleTransformModeButton" class="text-sm bg-gray-200 hover:bg-gray-300 text-gray-800 border border-gray-400 hover:border-gray-500 py-1 px-3 rounded shadow-sm w-full">Enable Transform</button>
+            </div>
+            <!-- Transform Mode Options (Initially Hidden) -->
+            <div id="transformModeOptions" class="hidden mt-2 flex justify-center space-x-1">
+                 <button id="setTranslateMode" title="Translate (W)" class="text-xs bg-blue-100 hover:bg-blue-200 text-blue-800 border border-blue-300 hover:border-blue-500 py-1 px-2 rounded shadow-sm">Move (W) </button>
+                 <button id="setRotateMode" title="Rotate (E)" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 hover:border-gray-500 py-1 px-2 rounded shadow-sm">Rotate (E) </button>
+                 <button id="setScaleMode" title="Scale (R)" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 hover:border-gray-500 py-1 px-2 rounded shadow-sm">Scale (R) </button>
+            </div>
         </div>
     </div>
   </div>
@@ -144,6 +154,7 @@
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { DragControls } from 'three/addons/controls/DragControls.js';
+    import { TransformControls } from 'three/addons/controls/TransformControls.js'; // Import TransformControls
 
     let scene, camera, renderer, controls, dropInViewer;
     // Add references for FOV controls
@@ -163,6 +174,12 @@
     let markerGroup; 
     // Add variable to store current mouse NDC
     const currentMouseNDC = new THREE.Vector2();
+    let transformControls; // Declare TransformControls variable
+    let transformModeActive = false; // State for transform mode
+    let toggleTransformModeButton; // Reference to the button
+    // Add references for transform mode options
+    let transformModeOptionsContainer;
+    let setTranslateModeButton, setRotateModeButton, setScaleModeButton;
 
     // --- Measurement Variables ---
     let measurementState = 'idle'; // 'idle', 'measuring'
@@ -173,6 +190,61 @@
     let measurementColorIndex = 0;
     let scaleFactor = 1.0; // 1 unit in Three.js = 1 unit in real world initially
     let currentAxisSnap = null; // null, 'x', 'y', 'z'
+
+    // --- Helper Function to Detach Gizmo ---
+    function detachGizmo() {
+        if (transformControls.object) {
+            transformControls.detach();
+            transformControls.visible = false;
+            transformControls.enabled = false;
+            console.log("Gizmo detached.");
+        }
+    }
+
+    // --- Helper Function to Update Transform Button State ---
+    function updateTransformButtonState() {
+        if (transformModeActive) {
+            toggleTransformModeButton.textContent = "Disable Transform";
+            toggleTransformModeButton.classList.remove('bg-gray-200', 'hover:bg-gray-300', 'text-gray-800', 'border-gray-400', 'hover:border-gray-500');
+            toggleTransformModeButton.classList.add('bg-green-200', 'hover:bg-green-300', 'text-green-900', 'border-green-400', 'hover:border-green-600');
+        } else {
+            toggleTransformModeButton.textContent = "Enable Transform";
+            toggleTransformModeButton.classList.remove('bg-green-200', 'hover:bg-green-300', 'text-green-900', 'border-green-400', 'hover:border-green-600');
+            toggleTransformModeButton.classList.add('bg-gray-200', 'hover:bg-gray-300', 'text-gray-800', 'border-gray-400', 'hover:border-gray-500');
+        }
+    }
+
+    // --- Helper Function to Update Transform Mode Buttons Visual State ---
+    function updateTransformModeButtons(activeMode) {
+        const buttons = [setTranslateModeButton, setRotateModeButton, setScaleModeButton];
+        const modes = ['translate', 'rotate', 'scale'];
+        const activeClasses = ['bg-blue-200', 'border-blue-500', 'text-blue-900'];
+        const inactiveClasses = ['bg-gray-100', 'hover:bg-gray-200', 'text-gray-800', 'border-gray-300', 'hover:border-gray-500'];
+
+        buttons.forEach((button, index) => {
+            // Remove all potentially conflicting classes first
+            button.classList.remove(...activeClasses, ...inactiveClasses);
+
+            if (modes[index] === activeMode) {
+                button.classList.add(...activeClasses);
+            } else {
+                button.classList.add(...inactiveClasses);
+            }
+        });
+    }
+
+
+    // --- Helper Function to Deactivate Transform Mode ---
+    function deactivateTransformMode() {
+        if (transformModeActive) {
+            transformModeActive = false;
+            detachGizmo();
+            updateTransformButtonState();
+            transformModeOptionsContainer.classList.add('hidden'); // Hide mode options
+            console.log("Transform mode deactivated.");
+        }
+    }
+
 
     function initThree() {
         const container = document.getElementById('renderer-container');
@@ -229,6 +301,15 @@
         measurementGroup = new THREE.Group();
         scene.add(measurementGroup);
 
+        // --- Transform Controls Initialization ---
+        transformControls = new TransformControls(camera, renderer.domElement);
+        transformControls.addEventListener('dragging-changed', function (event) {
+            controls.enabled = !event.value; // Disable OrbitControls while dragging gizmo
+        });
+        transformControls.visible = false; // Initially hidden
+        transformControls.enabled = false; // Initially disabled
+        scene.add(transformControls);
+
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
         fovValueDisplay = document.getElementById('fovValue');
@@ -275,6 +356,56 @@
             const newColor = event.target.value;
             scene.background = new THREE.Color(newColor);
         });
+
+        // Get Transform Mode Button element
+        toggleTransformModeButton = document.getElementById('toggleTransformModeButton');
+        // Get Transform Mode Options elements
+        transformModeOptionsContainer = document.getElementById('transformModeOptions');
+        setTranslateModeButton = document.getElementById('setTranslateMode');
+        setRotateModeButton = document.getElementById('setRotateMode');
+        setScaleModeButton = document.getElementById('setScaleMode');
+
+
+        // Add Transform Mode Button event listener
+        toggleTransformModeButton.addEventListener('click', () => {
+            transformModeActive = !transformModeActive; // Toggle the state
+            updateTransformButtonState(); // Update button appearance
+            if (!transformModeActive) {
+                detachGizmo(); // Detach gizmo if disabling the mode
+                transformModeOptionsContainer.classList.add('hidden'); // Hide mode options
+                console.log("Transform mode disabled via button.");
+            } else {
+                transformModeOptionsContainer.classList.remove('hidden'); // Show mode options
+                updateTransformModeButtons(transformControls.mode); // Update button styles to current mode
+                console.log("Transform mode enabled via button. Click splat to activate gizmo.");
+                 // If measuring, cancel it when enabling transform mode
+                 if (measurementState === 'measuring') {
+                     console.log("Transform mode enabled while measuring. Cancelling measurement.");
+                     resetMeasurementState();
+                 }
+            }
+        });
+
+        // Add listeners for mode change buttons
+        setTranslateModeButton.addEventListener('click', () => {
+            if (transformModeActive && transformControls.object) {
+                transformControls.setMode('translate');
+                updateTransformModeButtons('translate');
+            }
+        });
+        setRotateModeButton.addEventListener('click', () => {
+            if (transformModeActive && transformControls.object) {
+                transformControls.setMode('rotate');
+                updateTransformModeButtons('rotate');
+            }
+        });
+        setScaleModeButton.addEventListener('click', () => {
+            if (transformModeActive && transformControls.object) {
+                transformControls.setMode('scale');
+                updateTransformModeButtons('scale');
+            }
+        });
+
 
         // Initialize DragControls after markerGroup is added to the scene
         // Pass markerGroup.children, camera, and renderer.domElement
@@ -387,7 +518,7 @@
         });
 
         // --- Measurement Event Listeners ---
-        renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement actions
+        renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement AND gizmo activation
         window.addEventListener('keydown', onKeyDown, false);
         document.getElementById('clearPointsButton').addEventListener('click', clearReferencePoints);
         document.getElementById('clearMeasurementsButton').addEventListener('click', clearMeasurements);
@@ -493,6 +624,7 @@
                                 dropInViewer.viewer.splatMesh.rotation.x += Math.PI; // Add 180 degrees (PI radians)
                                 console.log("Rotation applied to mesh.");
                             }
+                            deactivateTransformMode(); // Deactivate transform mode on new load
                         })
                         .catch((e) => {
                             console.error("Error adding splat buffer via internal viewer:", e);
@@ -514,6 +646,9 @@
       } catch (e) {
         console.error("Could not load scene: " + e.message);
       }
+
+      // Detach gizmo and deactivate mode before loading new splat data
+      deactivateTransformMode(); // Use helper function
     }
 
     // --- Click-to-Spawn Reference Point Feature (Modified for dblclick) ---
@@ -639,40 +774,53 @@
         }
     }
 
-    // --- Click Listener (for measurements AND scale setting) --- // Renamed comment for clarity
+    // --- Click Listener (Refactored for measurements, scale setting, AND Gizmo Activation) ---
     function onClick(event) {
         event.preventDefault();
-        // Ignore clicks during drag
-        if (draggedObject) return;
+        console.log(`onClick triggered. Measurement State: ${measurementState}, Transform Mode: ${transformModeActive}`); // Log state
 
-        // Check if the click is on the UI panel.
+        // 1. Ignore if dragging marker or gizmo
+        if (draggedObject || transformControls.dragging) {
+            console.log("onClick ignored: Drag in progress.");
+            return;
+        }
+
+        // 2. Ignore if clicking UI panel
         const containerRect = document.getElementById('container').getBoundingClientRect();
         if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
             event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
+            console.log("onClick ignored: UI panel.");
             return; // Click is inside the UI panel
         }
 
+        // --- Raycasting Setup ---
         const mouse = new THREE.Vector2(
             (event.clientX / window.innerWidth) * 2 - 1,
             -(event.clientY / window.innerHeight) * 2 + 1
         );
         clickRaycaster.setFromCamera(mouse, camera);
 
-        // 1. Check for clicks on existing distance labels (for scaling)
-        const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
-            .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel); // Only consider distance labels
+        // --- Interaction Checks (Prioritized) ---
 
-        if (intersectsLabels.length > 0 && measurementState === 'idle') {
-            const clickedLabel = intersectsLabels[0].object;
-            setReferenceScale(clickedLabel);
-            return; // Don't proceed further
+        // 3. Check Label Click (Scaling) - Only if idle
+        let labelHit = false;
+        if (measurementState === 'idle') {
+            const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
+                .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel);
+            if (intersectsLabels.length > 0) {
+                labelHit = true;
+                console.log("onClick: Label clicked.");
+                setReferenceScale(intersectsLabels[0].object);
+                deactivateTransformMode(); // Deactivate transform mode if a label is clicked
+                return; // Label click handled
+            }
         }
+        console.log(`onClick: Label hit? ${labelHit} (State: ${measurementState})`);
 
-        // 2. Check for clicks on reference points (markers)
+        // 4. Check Marker Click (Measurement Start/Continue)
         const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
         let clickedMarker = null;
         if (intersectsMarkers.length > 0) {
-            // Find the parent group which is the actual marker
             let obj = intersectsMarkers[0].object;
             while (obj && !obj.userData.isReferencePoint) {
                 obj = obj.parent;
@@ -681,14 +829,77 @@
                 clickedMarker = obj;
             }
         }
+        console.log(`onClick: Marker hit? ${!!clickedMarker}`);
 
         if (clickedMarker) {
+            console.log("onClick: Marker interaction.");
             if (measurementState === 'idle') {
                 startMeasurement(clickedMarker);
+                deactivateTransformMode(); // Deactivate transform mode when starting measurement
             } else if (measurementState === 'measuring') {
                 addPointToMeasurement(clickedMarker);
+                // Transform mode should already be deactivated here
+            }
+            return; // Marker click handled
+        }
+
+        // --- If not label or marker, check splat or empty space ---
+
+        // 5. Check Splat Click (Gizmo Activation / Measurement Cancel)
+        const internalRaycaster = dropInViewer?.viewer?.raycaster;
+        let splatHit = false;
+        if (internalRaycaster && dropInViewer.viewer.splatMesh && dropInViewer.viewer.splatMesh.getSplatCount() > 0) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            const screenPosition = new THREE.Vector2(event.clientX - rect.left, event.clientY - rect.top);
+            renderer.getSize(renderDimensions);
+            outHits.length = 0;
+            internalRaycaster.setFromCameraAndScreenPosition(camera, screenPosition, renderDimensions);
+            internalRaycaster.intersectSplatMesh(dropInViewer.viewer.splatMesh, outHits);
+            if (outHits.length > 0) {
+                splatHit = true;
             }
         }
+        console.log(`onClick: Splat hit? ${splatHit}`);
+
+        if (splatHit) {
+            console.log("onClick: Splat interaction.");
+            // If measuring, cancel the measurement first
+            if (measurementState === 'measuring') {
+                console.log("onClick: Splat clicked while measuring. Cancelling measurement.");
+                resetMeasurementState(); // Cancel measurement
+            }
+
+            // Only attach gizmo if transform mode is active
+            if (transformModeActive) {
+                const shouldAttach = transformControls.object !== dropInViewer.viewer.splatMesh;
+                console.log(`onClick: Should attach gizmo (Transform Mode Active)? ${shouldAttach}`);
+                if (shouldAttach) {
+                    transformControls.attach(dropInViewer.viewer.splatMesh);
+                    transformControls.visible = true;
+                    transformControls.enabled = true;
+                    updateTransformModeButtons(transformControls.getMode()); // Update buttons on attach
+                    console.log("onClick: Gizmo attached to splat mesh.");
+                }
+                // If already attached, clicking the splat again does nothing (keeps it attached)
+            } else {
+                 console.log("onClick: Splat clicked, but Transform Mode is not active. Gizmo not attached.");
+                 // Optionally detach if clicking splat while mode is off? For now, do nothing.
+                 // detachGizmo();
+            }
+            return; // Splat click handled
+        }
+
+        // 6. Clicked on Empty Space (Gizmo Detach / Measurement Cancel)
+        // This block is reached if it wasn't UI, label, marker, or splat
+        console.log("onClick: Empty space interaction.");
+        // If measuring, cancel the measurement first
+        if (measurementState === 'measuring') {
+            console.log("onClick: Empty space clicked while measuring. Cancelling measurement.");
+            resetMeasurementState(); // Cancel measurement
+        }
+        // Detach the gizmo (state is guaranteed to be 'idle')
+        // Also deactivate transform mode when clicking empty space
+        deactivateTransformMode(); // Detach gizmo AND deactivate mode
     }
 
     // --- Pointer Move Listener (for preview line) ---
@@ -727,10 +938,47 @@
 
     // --- Key Down Listener ---
     function onKeyDown(event) {
+        // Handle gizmo controls if it's attached AND transform mode is active
+        if (transformControls.object && transformModeActive) { // Added transformModeActive check
+            let newMode = null;
+            switch (event.key.toLowerCase()) {
+                case 'w': // Translate
+                    transformControls.setMode("translate");
+                    newMode = 'translate';
+                    event.preventDefault();
+                    break;
+                case 'e': // Rotate
+                    transformControls.setMode("rotate");
+                    newMode = 'rotate';
+                    event.preventDefault();
+                    break;
+                case 'r': // Scale
+                    transformControls.setMode("scale");
+                    newMode = 'scale';
+                    event.preventDefault();
+                    break;
+                case 'q': // Toggle World/Local Space
+                    transformControls.setSpace(transformControls.space === "local" ? "world" : "local");
+                    event.preventDefault();
+                    break;
+                case 'escape': // Detach Gizmo AND Deactivate Mode
+                     // Only act if not measuring
+                     if (measurementState === 'idle') {
+                         deactivateTransformMode(); // Use helper function
+                         event.preventDefault();
+                     }
+                    break;
+            }
+            if (newMode) {
+                updateTransformModeButtons(newMode); // Update buttons on keyboard mode change
+            }
+        }
+
+        // Handle measurement controls if measuring
         if (measurementState === 'measuring') {
             switch (event.key) {
                 case 'Enter':
-                case 'Escape': // ESC
+                case 'Escape': // ESC also finishes measurement
                     finishMeasurement(false); // Finish as open path
                     event.preventDefault();
                     break;
@@ -980,11 +1228,13 @@
         currentAxisSnap = null;
         if (previewLine) {
             measurementGroup.remove(previewLine);
-            previewLine.geometry.dispose();
-            previewLine.material.dispose();
+            // Dispose geometry and material if they exist
+            if (previewLine.geometry) previewLine.geometry.dispose();
+            if (previewLine.material) previewLine.material.dispose();
             previewLine = null;
         }
-        console.log("Measurement state reset.");
+        console.log("Measurement state reset to idle."); // Updated log message
+        // Do NOT deactivate transform mode here, only when explicitly done or interacting elsewhere
     }
 
     function removeLastMeasurementSegment() {
@@ -1267,7 +1517,10 @@
                 // Dispose geometry/material if they were unique per marker (not the case here)
             }
             console.log("All reference points cleared.");
+            // Deactivate transform mode and detach gizmo
+            deactivateTransformMode(); // Use helper function (already hides options)
         }
+        // No need for the extra detachGizmo call outside the confirmation block
     }
 
     function clearMeasurements(askConfirmation = true) {
@@ -1297,7 +1550,10 @@
 
             resetMeasurementState(); // Ensure state is idle
             console.log("All measurements cleared.");
+            // Deactivate transform mode and detach gizmo
+            deactivateTransformMode(); // Use helper function (already hides options)
         }
+         // No need for the extra detachGizmo call outside the confirmation block
     }
 
     // Helper to clean up measurements if a point is deleted (basic version)
