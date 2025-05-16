@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="x-ua-compatible" content="ie=edge">
-  <title>3D Gaussian Splat Viewer</title>
+  <title>3D Gaussian Splat Viewer - Multiple Scenes</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body {
@@ -127,7 +127,7 @@
                 <label for="bgColorPicker" class="text-sm text-gray-600 whitespace-nowrap">BG:</label>
                 <input type="color" id="bgColorPicker" value="#000000" class="h-6 w-full border border-gray-400 rounded cursor-pointer mx-2">
             </div>
-            <!-- Measurement Controls -->
+            <!-- Measurement Controls (Keep for now, interaction might need adjustment) -->
             <div class="border-t pt-2 mt-2 border-gray-300 flex justify-center space-x-2">
                  <button id="clearPointsButton" class="text-xs bg-red-100 hover:bg-red-200 text-red-800 border border-red-300 hover:border-red-500 py-1 px-2 rounded shadow-sm">Clear Points</button>
                  <button id="clearMeasurementsButton" class="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-800 border border-yellow-300 hover:border-yellow-500 py-1 px-2 rounded shadow-sm">Clear Measures</button>
@@ -142,6 +142,13 @@
                  <button id="setRotateMode" title="Rotate (E)" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 hover:border-gray-500 py-1 px-2 rounded shadow-sm">Rotate (E) </button>
                  <button id="setScaleMode" title="Scale (R)" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-300 hover:border-gray-500 py-1 px-2 rounded shadow-sm">Scale (R) </button>
             </div>
+            <!-- Added Scene List for Selection (Optional but helpful) -->
+            <div id="sceneListContainer" class="border-t pt-2 mt-2 border-gray-300 max-h-40 overflow-y-auto">
+                 <h4 class="text-sm font-semibold text-gray-700 mb-1 text-center">Loaded Scenes</h4>
+                 <ul id="sceneList" class="text-xs text-gray-600 space-y-1">
+                     <!-- Scene items will be added here -->
+                 </ul>
+            </div>
         </div>
     </div>
   </div>
@@ -153,26 +160,24 @@
     import * as GaussianSplats3D from 'gaussian-splats-3d';
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-    import { DragControls } from 'three/addons/controls/DragControls.js';
+    // DragControls removed as TransformControls is preferred for object manipulation
+    // import { DragControls } from 'three/addons/controls/DragControls.js';
     import { TransformControls } from 'three/addons/controls/TransformControls.js'; // Import TransformControls
 
-    let scene, camera, renderer, controls, dropInViewer;
+    let scene, camera, renderer, controls;
+    // CHANGE: Store multiple viewers
+    let splatViewers = []; // Array to hold multiple DropInViewer instances
+    let splatViewerFiles = []; // Store corresponding file info
+    let activeSplatViewer = null; // Keep track of the currently selected viewer
+
     // Add references for FOV controls
     let fovSlider, fovValueDisplay;
     // Add reference for background color picker
     let bgColorPicker;
-    // Add variables for DragControls and drag state
-    let dragControls;
-    let draggedObject = null;
-    let dragAxis = null;
-    let initialPosition = new THREE.Vector3();
-    const dragPlane = new THREE.Plane();
-    const dragRaycaster = new THREE.Raycaster();
-    const dragIntersection = new THREE.Vector3();
-    const dragOffset = new THREE.Vector3(); // To store initial offset on the plane
-    // Declare markerGroup here so it's accessible within initThree scope before DragControls
-    let markerGroup; 
-    // Add variable to store current mouse NDC
+
+    // Declare markerGroup here so it's accessible within initThree scope (if measurement kept)
+    let markerGroup;
+    // Add variable to store current mouse NDC (if measurement kept)
     const currentMouseNDC = new THREE.Vector2();
     let transformControls; // Declare TransformControls variable
     let transformModeActive = false; // State for transform mode
@@ -181,7 +186,7 @@
     let transformModeOptionsContainer;
     let setTranslateModeButton, setRotateModeButton, setScaleModeButton;
 
-    // --- Measurement Variables ---
+    // --- Measurement Variables (Keep for now, interaction might need adjustment) ---
     let measurementState = 'idle'; // 'idle', 'measuring'
     let currentMeasurementSequence = []; // { point: THREE.Vector3, marker: THREE.Group, segmentLine?: THREE.Line, distanceLabel?: THREE.Sprite, areaLabel?: THREE.Sprite }
     let measurementGroup; // Group for lines and labels
@@ -191,12 +196,19 @@
     let scaleFactor = 1.0; // 1 unit in Three.js = 1 unit in real world initially
     let currentAxisSnap = null; // null, 'x', 'y', 'z'
 
+    // --- Scene List UI ---
+    let sceneListElement;
+
     // --- Helper Function to Detach Gizmo ---
     function detachGizmo() {
         if (transformControls.object) {
             transformControls.detach();
             transformControls.visible = false;
             transformControls.enabled = false;
+            if (activeSplatViewer) { // Deselect UI element if attached
+                 updateSceneListSelection(null);
+            }
+            activeSplatViewer = null; // Deselect viewer logically
             console.log("Gizmo detached.");
         }
     }
@@ -218,13 +230,11 @@
     function updateTransformModeButtons(activeMode) {
         const buttons = [setTranslateModeButton, setRotateModeButton, setScaleModeButton];
         const modes = ['translate', 'rotate', 'scale'];
-        const activeClasses = ['bg-blue-200', 'border-blue-500', 'text-blue-900'];
+        const activeClasses = ['bg-blue-200', 'border-blue-500', 'text-blue-900']; // Brighter active state
         const inactiveClasses = ['bg-gray-100', 'hover:bg-gray-200', 'text-gray-800', 'border-gray-300', 'hover:border-gray-500'];
 
         buttons.forEach((button, index) => {
-            // Remove all potentially conflicting classes first
-            button.classList.remove(...activeClasses, ...inactiveClasses);
-
+            button.classList.remove(...activeClasses, ...inactiveClasses); // Clear previous styles
             if (modes[index] === activeMode) {
                 button.classList.add(...activeClasses);
             } else {
@@ -238,11 +248,72 @@
     function deactivateTransformMode() {
         if (transformModeActive) {
             transformModeActive = false;
-            detachGizmo();
+            detachGizmo(); // Detach from any active viewer
             updateTransformButtonState();
             transformModeOptionsContainer.classList.add('hidden'); // Hide mode options
             console.log("Transform mode deactivated.");
         }
+    }
+
+    // --- Scene List UI Update ---
+    function populateSceneList() {
+        if (!sceneListElement) sceneListElement = document.getElementById('sceneList');
+        sceneListElement.innerHTML = ''; // Clear existing list
+
+        if (splatViewers.length === 0) {
+             sceneListElement.innerHTML = '<li class="italic text-center text-gray-500">No scenes loaded</li>';
+             return;
+        }
+
+        splatViewers.forEach((viewer, index) => {
+            const fileInfo = splatViewerFiles[index];
+            const li = document.createElement('li');
+            li.textContent = `${index + 1}: ${fileInfo.name}`;
+            li.dataset.sceneIndex = index; // Store index for click handling
+            li.classList.add('p-1', 'border-b', 'border-gray-200', 'cursor-pointer', 'hover:bg-gray-100');
+            li.addEventListener('click', handleSceneListItemClick);
+            sceneListElement.appendChild(li);
+        });
+        updateSceneListSelection(activeSplatViewer); // Highlight if already selected
+    }
+
+    function handleSceneListItemClick(event) {
+        const index = parseInt(event.target.dataset.sceneIndex);
+        const clickedViewer = splatViewers[index];
+
+        if (transformModeActive && clickedViewer) {
+            if (activeSplatViewer !== clickedViewer) {
+                detachGizmo(); // Detach from previous
+                transformControls.attach(clickedViewer); // Attach to DropInViewer object
+                transformControls.visible = true;
+                transformControls.enabled = true;
+                activeSplatViewer = clickedViewer;
+                updateTransformModeButtons(transformControls.getMode());
+                console.log(`Gizmo attached to scene #${index + 1} via list.`);
+            } else {
+                 // Clicked the already active scene, detach
+                 detachGizmo();
+            }
+            updateSceneListSelection(activeSplatViewer);
+        } else if (!transformModeActive) {
+             console.log("Enable Transform mode first to select a scene.");
+        }
+    }
+
+    // Highlight the selected item in the UI list
+    function updateSceneListSelection(selectedViewer) {
+        if (!sceneListElement) return;
+        const items = sceneListElement.querySelectorAll('li');
+        items.forEach(item => {
+            const index = parseInt(item.dataset.sceneIndex);
+            if (splatViewers[index] === selectedViewer) {
+                item.classList.add('bg-blue-100', 'font-semibold');
+                item.classList.remove('hover:bg-gray-100');
+            } else {
+                item.classList.remove('bg-blue-100', 'font-semibold');
+                item.classList.add('hover:bg-gray-100');
+            }
+        });
     }
 
 
@@ -251,13 +322,13 @@
 
         // Scene
         scene = new THREE.Scene();
-        // Set initial background color
         scene.background = new THREE.Color(0x000000); // Black
 
         // Camera
         const initialFov = 75; // Store initial FOV
         camera = new THREE.PerspectiveCamera(initialFov, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 0, 5); // Default position
+        camera.position.set(0, 1, 5); // Adjusted initial position slightly
+        camera.lookAt(0, 0, 0); // Look at origin
 
         // Renderer
         renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -265,8 +336,8 @@
         renderer.setPixelRatio(window.devicePixelRatio);
         container.appendChild(renderer.domElement);
 
-        // Add pointermove listener to track mouse position
-        renderer.domElement.addEventListener('pointermove', onPointerMove, false); // Renamed for clarity
+        // Add pointermove listener (keep for measurement preview if needed)
+        renderer.domElement.addEventListener('pointermove', onPointerMove, false);
 
         // Controls
         controls = new OrbitControls(camera, renderer.domElement);
@@ -284,20 +355,11 @@
         const gridHelper = new THREE.GridHelper( size, divisions );
         scene.add( gridHelper );
 
-        // DropInViewer - Initialize with SH degree 2 (max) to support loading files up to SH 2
-        dropInViewer = new GaussianSplats3D.DropInViewer({
-             'sharedMemoryForWorkers': false,
-             'gpuAcceleratedSort': false,
-             'sphericalHarmonicsDegree': 2 // Initialize with max SH degree support
-        });
-        scene.add(dropInViewer); // Add viewer to the scene
-
-        // --- Marker Group Initialization (Moved Earlier) ---
-        // Create a group to hold all marker spheres
+        // --- Marker Group Initialization (Keep ONLY if Measurement Points needed) ---
         markerGroup = new THREE.Group(); // Assign to the outer scope variable
         scene.add(markerGroup); // Add the group to the scene
 
-        // --- Measurement Group Initialization ---
+        // --- Measurement Group Initialization (Keep if needed) ---
         measurementGroup = new THREE.Group();
         scene.add(measurementGroup);
 
@@ -306,9 +368,11 @@
         transformControls.addEventListener('dragging-changed', function (event) {
             controls.enabled = !event.value; // Disable OrbitControls while dragging gizmo
         });
+         // Add to scene once, detach/attach as needed
+        scene.add(transformControls);
         transformControls.visible = false; // Initially hidden
         transformControls.enabled = false; // Initially disabled
-        scene.add(transformControls);
+
 
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
@@ -323,28 +387,22 @@
         // Add FOV slider event listener
         fovSlider.addEventListener('input', () => {
             const newFov = parseInt(fovSlider.value);
-
             // Calculate distance adjustment to maintain apparent size at target
             const currentDistance = camera.position.distanceTo(controls.target);
             const currentFovRad = THREE.MathUtils.degToRad(camera.fov);
             const newFovRad = THREE.MathUtils.degToRad(newFov);
-
             // Avoid division by zero/very small numbers if tan(newFovRad / 2) is close to zero
             const tanNewFovHalf = Math.tan(newFovRad / 2);
             if (tanNewFovHalf > 1e-6) { // Check against a small epsilon
                 const newDistance = currentDistance * (Math.tan(currentFovRad / 2) / tanNewFovHalf);
-
                 // Calculate direction and new position
                 const direction = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
                 const newPosition = new THREE.Vector3().copy(controls.target).addScaledVector(direction, newDistance);
-
                 // Update camera position first
                 camera.position.copy(newPosition);
             } else {
                  console.warn("FOV too small, cannot adjust distance effectively.");
             }
-
-
             // Update camera FOV
             camera.fov = newFov;
             camera.updateProjectionMatrix();
@@ -376,9 +434,14 @@
                 console.log("Transform mode disabled via button.");
             } else {
                 transformModeOptionsContainer.classList.remove('hidden'); // Show mode options
-                updateTransformModeButtons(transformControls.mode); // Update button styles to current mode
-                console.log("Transform mode enabled via button. Click splat to activate gizmo.");
-                 // If measuring, cancel it when enabling transform mode
+                 if (activeSplatViewer) { // Update buttons only if something is selected
+                     updateTransformModeButtons(transformControls.getMode());
+                 } else {
+                     // Maybe reset buttons to default appearance if nothing selected?
+                     updateTransformModeButtons(null); // Reset button styles
+                 }
+                console.log("Transform mode enabled via button. Click a splat scene to activate gizmo.");
+                 // Cancel measurement if enabling transform mode
                  if (measurementState === 'measuring') {
                      console.log("Transform mode enabled while measuring. Cancelling measurement.");
                      resetMeasurementState();
@@ -407,121 +470,17 @@
         });
 
 
-        // Initialize DragControls after markerGroup is added to the scene
-        // Pass markerGroup.children, camera, and renderer.domElement
-        // Note: DragControls modifies the passed array, so using markerGroup.children directly works.
-        dragControls = new DragControls(markerGroup.children, camera, renderer.domElement);
-        dragControls.enabled = true; // Ensure it's enabled
+        // --- DragControls REMOVED ---
 
-        // --- DragControls Event Listeners ---
-
-        dragControls.addEventListener('dragstart', function (event) {
-            const object = event.object; // This is the clicked mesh (crossMeshX, Y, or Z)
-            if (!object.parent || !object.parent.isGroup) return; // Ensure it's part of a cross marker
-
-            console.log("Drag Start:", object.name);
-            controls.enabled = false; // Disable OrbitControls during drag
-            draggedObject = object.parent; // Store the parent group (the whole cross)
-            initialPosition.copy(draggedObject.position); // Store initial position
-
-            // Determine the axis based on the clicked mesh's name
-            switch (object.name) {
-                case 'crossX':
-                    dragAxis = new THREE.Vector3(1, 0, 0); // Local X
-                    break;
-                case 'crossY':
-                    dragAxis = new THREE.Vector3(0, 1, 0); // Local Y
-                    break;
-                case 'crossZ':
-                    dragAxis = new THREE.Vector3(0, 0, 1); // Local Z
-                    break;
-                default:
-                    dragAxis = null;
-                    draggedObject = null;
-                    controls.enabled = true; // Re-enable if not a valid part
-                    return;
-            }
-
-            // Create a plane perpendicular to the camera view, passing through the object's center
-            const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
-            dragPlane.setFromNormalAndCoplanarPoint(cameraDirection, initialPosition);
-
-            // Raycast to find the initial intersection point on the plane
-            if (event.domEvent) { // Check if there's a valid DOM event with clientX and clientY
-                const mouse = new THREE.Vector2(
-                    (event.domEvent.clientX / window.innerWidth) * 2 - 1,
-                    -(event.domEvent.clientY / window.innerHeight) * 2 + 1
-                );
-                dragRaycaster.setFromCamera(mouse, camera);
-                if (dragRaycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
-                    // This is the key change - we calculate dragOffset as the vector from
-                    // the intersection point to the object's center
-                    dragOffset.subVectors(initialPosition, dragIntersection);
-                    console.log("Initial plane intersection:", dragIntersection);
-                } else {
-                    console.warn("Could not intersect drag plane on dragstart.");
-                    dragOffset.set(0,0,0);
-                }
-            } else {
-                // Fallback if no valid dom event
-                dragRaycaster.setFromCamera(currentMouseNDC, camera);
-                if (dragRaycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
-                    dragOffset.subVectors(initialPosition, dragIntersection);
-                } else {
-                    console.warn("Could not intersect drag plane on dragstart using NDC.");
-                    dragOffset.set(0,0,0);
-                }
-            }
-            
-            // Reset the child object's position to prevent its own movement
-            event.object.position.set(0, 0, 0);
-        });
-
-        dragControls.addEventListener('drag', function (event) {
-            if (!draggedObject || !dragAxis) return;
-
-            // Raycast from current mouse position (using tracked NDC) to the drag plane
-            dragRaycaster.setFromCamera(currentMouseNDC, camera); // Use tracked mouse position
-
-            if (dragRaycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
-                // Add the stored offset to get the new position
-                // This preserves the original click offset from the center
-                const targetPointOnPlane = dragIntersection.clone().add(dragOffset);
-                
-                // Calculate the displacement vector on the plane
-                const displacementOnPlane = targetPointOnPlane.clone().sub(initialPosition);
-
-                // Get the world-space direction of the selected local axis
-                const worldAxis = dragAxis.clone().applyQuaternion(draggedObject.quaternion).normalize();
-
-                // Project the displacement vector onto the world axis
-                const projectedDisplacement = worldAxis.clone().multiplyScalar(displacementOnPlane.dot(worldAxis));
-
-                // Update the parent object's position
-                draggedObject.position.copy(initialPosition).add(projectedDisplacement);
-
-                // Reset the position of the actually dragged child mesh relative to its parent
-                event.object.position.set(0, 0, 0); 
-            }
-        });
-
-        dragControls.addEventListener('dragend', function (event) {
-            console.log("Drag End");
-            if (draggedObject) { // Only re-enable if a drag actually happened
-                 controls.enabled = true;
-            }
-            // Clear state
-            draggedObject = null;
-            dragAxis = null;
-            initialPosition.set(0,0,0);
-            dragOffset.set(0,0,0);
-        });
-
-        // --- Measurement Event Listeners ---
+        // --- Measurement Event Listeners (Keep for now) ---
         renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement AND gizmo activation
         window.addEventListener('keydown', onKeyDown, false);
         document.getElementById('clearPointsButton').addEventListener('click', clearReferencePoints);
         document.getElementById('clearMeasurementsButton').addEventListener('click', clearMeasurements);
+
+        // --- Scene List ---
+        sceneListElement = document.getElementById('sceneList');
+        populateSceneList(); // Initial population (will be empty)
 
         // Handle window resize
         window.addEventListener('resize', onWindowResize, false);
@@ -539,6 +498,7 @@
     function animate() {
         requestAnimationFrame(animate);
         controls.update(); // Update controls
+        // No specific viewer updates needed here if they are just Object3Ds
         renderer.render(scene, camera);
     }
 
@@ -549,52 +509,50 @@
 
     // Pass SH degree to loaders that support it
     function fileBufferToSplatBuffer(fileBufferData, format, alphaRemovalThreshold, outSphericalHarmonicsDegree) {
-      const optimize = false;
-      const compressionLevel = 0;
-      // Use outSphericalHarmonicsDegree passed from UI
-      if (format === GaussianSplats3D.SceneFormat.Ply) {
-        return GaussianSplats3D.PlyLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, outSphericalHarmonicsDegree, undefined, undefined, undefined, undefined);
-      } else if (format === GaussianSplats3D.SceneFormat.Splat) {
-        // SplatLoader doesn't take SH degree as input, it's determined by the file
-        return GaussianSplats3D.SplatLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, undefined, undefined, undefined, undefined);
-      } else if (format === GaussianSplats3D.SceneFormat.KSplat) {
-        // KSplatLoader doesn't take SH degree as input
-        return GaussianSplats3D.KSplatLoader.loadFromFileData(fileBufferData.data);
-      } else if (format === GaussianSplats3D.SceneFormat.Spz) {
-        // SpzLoader takes SH degree as input
-        return GaussianSplats3D.SpzLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, outSphericalHarmonicsDegree, undefined, undefined, undefined, undefined);
-      } else {
-        return Promise.reject(`Unsupported file format: ${format}`);
-      }
+      // ... (keep this function as is) ...
+        const optimize = false;
+        const compressionLevel = 0;
+        // Use outSphericalHarmonicsDegree passed from UI
+        if (format === GaussianSplats3D.SceneFormat.Ply) {
+            return GaussianSplats3D.PlyLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, outSphericalHarmonicsDegree, undefined, undefined, undefined, undefined);
+        } else if (format === GaussianSplats3D.SceneFormat.Splat) {
+            // SplatLoader doesn't take SH degree as input, it's determined by the file
+            return GaussianSplats3D.SplatLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, undefined, undefined, undefined, undefined);
+        } else if (format === GaussianSplats3D.SceneFormat.KSplat) {
+            // KSplatLoader doesn't take SH degree as input
+            return GaussianSplats3D.KSplatLoader.loadFromFileData(fileBufferData.data);
+        } else if (format === GaussianSplats3D.SceneFormat.Spz) {
+            // SpzLoader takes SH degree as input
+            return GaussianSplats3D.SpzLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, outSphericalHarmonicsDegree, undefined, undefined, undefined, undefined);
+        } else {
+            return Promise.reject(`Unsupported file format: ${format}`);
+        }
     }
 
-    // Assign functions to window object to make them accessible from inline HTML event handlers
-    window.onFileChange = function(arg) { // Assign directly to window.onFileChange
+    // CHANGE: Modified onFileChange to create new viewers
+    window.onFileChange = function(arg) {
       const viewFile = document.getElementById("viewFile");
+      if (!arg || !arg.files || arg.files.length === 0) return;
 
-      if (!arg || !arg.files || arg.files.length === 0) {
+      const file = viewFile.files[0];
+      const alphaRemovalThreshold = parseInt(document.getElementById("alphaRemovalThresholdView").value);
+      const sphericalHarmonicsDegree = parseInt(document.getElementById("viewSphericalHarmonicsDegree").value);
+      const rotateSplat = document.getElementById("rotateSplatCheckbox").checked;
+
+      if (isNaN(alphaRemovalThreshold) || alphaRemovalThreshold < 0 || alphaRemovalThreshold > 255) {
+          console.error("Invalid alpha removal threshold (0-255).");
           return;
       }
 
-      const alphaRemovalThreshold = parseInt(document.getElementById("alphaRemovalThresholdView").value);
-      // Read sphericalHarmonicsDegree input reading from select element
-      const sphericalHarmonicsDegree = parseInt(document.getElementById("viewSphericalHarmonicsDegree").value);
-      // Read rotation checkbox state
-      const rotateSplat = document.getElementById("rotateSplatCheckbox").checked;
-
-      // Validation
-      if (isNaN(alphaRemovalThreshold) || alphaRemovalThreshold < 0 || alphaRemovalThreshold > 255) {
-        console.error("Invalid alpha removal threshold (0-255).");
-        return;
-      }
-
-      const viewFileName = viewFile.files[0].name.trim();
+      const viewFileName = file.name.trim();
       const format = GaussianSplats3D.LoaderUtils.sceneFormatFromPath(viewFileName);
-
       if (format === undefined) {
           console.error("Could not determine file format. Ensure file has a .ply, .splat, .ksplat, or .spz extension.");
           return;
       }
+
+      // Detach gizmo and deactivate mode before loading new splat data
+      deactivateTransformMode();
 
       try {
         const fileReader = new FileReader();
@@ -602,32 +560,43 @@
           console.log("Processing file...");
           setTimeout(() => { // Keep setTimeout for UI responsiveness during parse
               try {
-                // Pass alpha threshold and SH degree
                 const splatBufferPromise = fileBufferToSplatBuffer({data: fileReader.result}, format, alphaRemovalThreshold, sphericalHarmonicsDegree);
 
                 splatBufferPromise.then((splatBuffer) => {
-                    // Prepare options for adding the buffer
+                    // --- CREATE NEW VIEWER ---
+                    const newDropInViewer = new GaussianSplats3D.DropInViewer({
+                         'sharedMemoryForWorkers': false, // May need tuning for multiple workers
+                         'gpuAcceleratedSort': false,     // May need tuning for multiple viewers
+                         'sphericalHarmonicsDegree': sphericalHarmonicsDegree // Use selected degree
+                    });
+
                     const splatBufferOptions = {
                         'splatAlphaRemovalThreshold': alphaRemovalThreshold,
-                        // SH degree is inherent in the loaded splatBuffer, not needed here
                     };
 
-                    // Access the internal viewer and use its addSplatBuffers method
-                    // Set replaceExisting to false to additively load splats
-                    dropInViewer.viewer.addSplatBuffers([splatBuffer], [splatBufferOptions], true, false, false, false) // Changed replaceExisting to false
+                    // Add the buffer to the NEW viewer instance, REPLACING anything hypothetically there
+                    newDropInViewer.viewer.addSplatBuffers([splatBuffer], [splatBufferOptions], true, true /* replaceExisting */, false, false)
                         .then(() => {
-                            console.log("Splat buffer added via internal viewer.");
-                            // Apply rotation to the Three.js object if checked
-                            if (rotateSplat && dropInViewer.viewer.splatMesh) {
-                                console.log("Applying 180-degree Y rotation to splat mesh...");
-                                // Rotate the splatMesh object directly
-                                dropInViewer.viewer.splatMesh.rotation.x += Math.PI; // Add 180 degrees (PI radians)
-                                console.log("Rotation applied to mesh.");
+                            console.log(`Splat buffer added to new viewer instance.`);
+
+                            // Apply rotation to the DropInViewer object itself if checked
+                            if (rotateSplat) {
+                                newDropInViewer.rotation.x += Math.PI; // Add 180 degrees (PI radians) to X-axis
+                                console.log("Rotation applied to new viewer object.");
                             }
-                            deactivateTransformMode(); // Deactivate transform mode on new load
+
+                            // Add the new viewer to the scene and our collections
+                            scene.add(newDropInViewer);
+                            splatViewers.push(newDropInViewer);
+                            splatViewerFiles.push({ name: file.name, size: file.size }); // Store file info
+                            console.log(`Added viewer #${splatViewers.length} ('${file.name}') to scene.`);
+                            populateSceneList(); // Update the UI list
+
                         })
                         .catch((e) => {
-                            console.error("Error adding splat buffer via internal viewer:", e);
+                            console.error("Error adding splat buffer to new viewer:", e);
+                            // Clean up the partially created viewer if add fails
+                            scene.remove(newDropInViewer); // Remove from scene
                         });
                 })
                 .catch((e) => {
@@ -638,150 +607,130 @@
               }
           }, 10);
         }
-        fileReader.onerror = function() {
-            console.error("Error reading file.");
-        }
+        fileReader.onerror = function() { console.error("Error reading file."); }
         console.log("Loading file...");
-        fileReader.readAsArrayBuffer(viewFile.files[0]);
+        fileReader.readAsArrayBuffer(file);
       } catch (e) {
         console.error("Could not load scene: " + e.message);
       }
-
-      // Detach gizmo and deactivate mode before loading new splat data
-      deactivateTransformMode(); // Use helper function
     }
 
-    // --- Click-to-Spawn Reference Point Feature (Modified for dblclick) ---
+    // --- Click-to-Spawn Reference Point Feature (Keep for now, interaction might need adjustment) ---
     // --- Define materials and geometry for the cross marker ---
     const baseCrossSize = 0.2; // Base size of the cross arms at reference distance
     const crossThicknessRatio = 0.1; // Thickness relative to size
-    // Geometry will be created dynamically based on scale
-
     const crossMaterialX = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red for X
     const crossMaterialY = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); // Green for Y
     const crossMaterialZ = new THREE.MeshBasicMaterial({ color: 0x0000ff }); // Blue for Z
 
     // Function to create a cross marker (Reference Point)
     function createCrossMarkerAtPosition(position, cameraPosition) {
-        const distance = position.distanceTo(cameraPosition);
-        const referenceDistance = 5.0; // Adjust as needed - distance at which base size is used
-        const scaleFactor = (distance / referenceDistance); // Scale proportionally to distance
-
-        const currentCrossSize = baseCrossSize * scaleFactor;
-        const currentCrossThickness = currentCrossSize * crossThicknessRatio;
-
-        // Create geometry with the calculated size
-        // Use separate geometries for each arm to allow individual clicking
-        const dynamicCrossGeometryX = new THREE.BoxGeometry(currentCrossSize, currentCrossThickness, currentCrossThickness);
-        const dynamicCrossGeometryY = new THREE.BoxGeometry(currentCrossThickness, currentCrossSize, currentCrossThickness); // Adjusted for Y axis
-        const dynamicCrossGeometryZ = new THREE.BoxGeometry(currentCrossThickness, currentCrossThickness, currentCrossSize); // Adjusted for Z axis
-
-
-        const crossGroup = new THREE.Group();
-
-        // X-axis arm (Red)
-        const crossMeshX = new THREE.Mesh(dynamicCrossGeometryX, crossMaterialX);
-        crossMeshX.name = 'crossX'; // Assign name
-
-        // Y-axis arm (Green)
-        const crossMeshY = new THREE.Mesh(dynamicCrossGeometryY, crossMaterialY);
-        // No rotation needed due to adjusted geometry
-        crossMeshY.name = 'crossY'; // Assign name
-
-        // Z-axis arm (Blue)
-        const crossMeshZ = new THREE.Mesh(dynamicCrossGeometryZ, crossMaterialZ);
-        // No rotation needed due to adjusted geometry
-        crossMeshZ.name = 'crossZ'; // Assign name
-
-        crossGroup.add(crossMeshX);
-        crossGroup.add(crossMeshY);
-        crossGroup.add(crossMeshZ);
-
-        // No need to scale the group, as geometry size is dynamic
-        crossGroup.position.copy(position);
-        crossGroup.userData.isReferencePoint = true;
-        crossGroup.userData.originalPosition = position.clone(); // Store initial position if needed later
-        markerGroup.add(crossGroup); // Add to the main marker group
-
-        console.log(`Reference Point added at: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)} with scale factor ${scaleFactor.toFixed(2)} (dist: ${distance.toFixed(2)})`);
-
-        // Dispose of dynamic geometry
-        dynamicCrossGeometryX.dispose();
-        dynamicCrossGeometryY.dispose();
-        dynamicCrossGeometryZ.dispose();
-        // Note: DragControls automatically updates its list when children are added to markerGroup
+        // ... (keep this function as is) ...
+         const distance = position.distanceTo(cameraPosition);
+         const referenceDistance = 5.0;
+         const scaleFactor = (distance / referenceDistance);
+         const currentCrossSize = baseCrossSize * scaleFactor;
+         const currentCrossThickness = currentCrossSize * crossThicknessRatio;
+         const dynamicCrossGeometryX = new THREE.BoxGeometry(currentCrossSize, currentCrossThickness, currentCrossThickness);
+         const dynamicCrossGeometryY = new THREE.BoxGeometry(currentCrossThickness, currentCrossSize, currentCrossThickness);
+         const dynamicCrossGeometryZ = new THREE.BoxGeometry(currentCrossThickness, currentCrossThickness, currentCrossSize);
+         const crossGroup = new THREE.Group();
+         const crossMeshX = new THREE.Mesh(dynamicCrossGeometryX, crossMaterialX);
+         crossMeshX.name = 'crossX';
+         const crossMeshY = new THREE.Mesh(dynamicCrossGeometryY, crossMaterialY);
+         crossMeshY.name = 'crossY';
+         const crossMeshZ = new THREE.Mesh(dynamicCrossGeometryZ, crossMaterialZ);
+         crossMeshZ.name = 'crossZ';
+         crossGroup.add(crossMeshX);
+         crossGroup.add(crossMeshY);
+         crossGroup.add(crossMeshZ);
+         crossGroup.position.copy(position);
+         crossGroup.userData.isReferencePoint = true;
+         crossGroup.userData.originalPosition = position.clone();
+         markerGroup.add(crossGroup);
+         console.log(`Reference Point added at: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}`);
+         dynamicCrossGeometryX.dispose();
+         dynamicCrossGeometryY.dispose();
+         dynamicCrossGeometryZ.dispose();
     }
 
     // --- Raycaster Setup and Event Handling ---
-    const outHits = [];
+    const outHits = []; // Reusable array for hits from a single viewer
+    const allOutHits = []; // To collect hits from ALL viewers per click
     const renderDimensions = new THREE.Vector2();
-    const clickRaycaster = new THREE.Raycaster(); // Use a separate raycaster for clicks to avoid conflicts
+    const clickRaycaster = new THREE.Raycaster(); // Use a separate raycaster for clicks
     clickRaycaster.params.Line.threshold = 0.1; // Adjust threshold for clicking lines
     clickRaycaster.params.Points.threshold = 0.1; // If needed for points
 
-    // --- Double Click Listener (for placing points ONLY) ---
+    // --- Double Click Listener (Keep for placing points ONLY) ---
     renderer.domElement.addEventListener('dblclick', onDoubleClick, false);
 
     function onDoubleClick(event) {
-        event.preventDefault();
-        // Check if the click is on the UI panel.
-        const containerRect = document.getElementById('container').getBoundingClientRect();
-        if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
-            event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
-            return; // Click is inside the UI panel
-        }
+        // ... (keep this function as is, but note it raycasts against all viewers now) ...
+         event.preventDefault();
+         const containerRect = document.getElementById('container').getBoundingClientRect();
+         if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
+             event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
+             return; // Click is inside the UI panel
+         }
 
-        // Check if double-clicking an existing marker (to delete it)
-        const mouse = new THREE.Vector2(
-            (event.clientX / window.innerWidth) * 2 - 1,
-            -(event.clientY / window.innerHeight) * 2 + 1
-        );
-        clickRaycaster.setFromCamera(mouse, camera); // Use clickRaycaster
-        const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
+         const mouse = new THREE.Vector2(
+             (event.clientX / window.innerWidth) * 2 - 1,
+             -(event.clientY / window.innerHeight) * 2 + 1
+         );
+         clickRaycaster.setFromCamera(mouse, camera);
+         const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
 
-        if (intersectsMarkers.length > 0) {
-            const intersectedObject = intersectsMarkers[0].object;
-            if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
-                const crossToRemove = intersectedObject.parent;
-                markerGroup.remove(crossToRemove);
-                console.log("Reference Point removed by double-click.");
-                return; // Don't proceed to splat raycasting
-            }
-        }
+         if (intersectsMarkers.length > 0) {
+             const intersectedObject = intersectsMarkers[0].object;
+             if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
+                 const crossToRemove = intersectedObject.parent;
+                 markerGroup.remove(crossToRemove);
+                 // cleanupMeasurementsForPoint(crossToRemove); // Consider if needed
+                 console.log("Reference Point removed by double-click.");
+                 return;
+             }
+         }
 
-        // --- Raycast against splats to place a NEW point ---
-        const internalRaycaster = dropInViewer?.viewer?.raycaster;
-        if (!internalRaycaster || !dropInViewer.viewer.splatMesh || dropInViewer.viewer.splatMesh.getSplatCount() === 0) {
-            console.log("No splats loaded or raycaster not ready for placing point.");
-            return;
-        }
+         // Raycast against ALL viewers to find where to place the point
+         let closestHitPosition = null;
+         let minHitDistance = Infinity;
 
-        const rect = renderer.domElement.getBoundingClientRect();
-        const screenPosition = new THREE.Vector2(event.clientX - rect.left, event.clientY - rect.top);
-        renderer.getSize(renderDimensions);
-        outHits.length = 0;
-        internalRaycaster.setFromCameraAndScreenPosition(camera, screenPosition, renderDimensions);
-        internalRaycaster.intersectSplatMesh(dropInViewer.viewer.splatMesh, outHits);
+         for (const viewer of splatViewers) {
+             const internalRaycaster = viewer?.viewer?.raycaster;
+             const splatMesh = viewer?.viewer?.splatMesh;
 
-        if (outHits.length > 0) {
-            const hitPosition = outHits[0].origin;
-            createCrossMarkerAtPosition(hitPosition, camera.position);
-            // Optional: Center controls on new point? Maybe not for double-click.
-            // controls.target.copy(hitPosition);
-            // controls.update();
-        } else {
-            console.log("No splat hit on double-click.");
-        }
+             if (!internalRaycaster || !splatMesh || splatMesh.getSplatCount() === 0) continue;
+
+             const rect = renderer.domElement.getBoundingClientRect();
+             const screenPosition = new THREE.Vector2(event.clientX - rect.left, event.clientY - rect.top);
+             renderer.getSize(renderDimensions);
+             outHits.length = 0;
+
+             internalRaycaster.ray = clickRaycaster.ray; // Use main ray
+             internalRaycaster.intersectSplatMesh(splatMesh, outHits);
+
+             if (outHits.length > 0 && outHits[0].distance < minHitDistance) {
+                 minHitDistance = outHits[0].distance;
+                 closestHitPosition = outHits[0].origin; // Store world-space hit position
+             }
+         }
+
+         if (closestHitPosition) {
+             createCrossMarkerAtPosition(closestHitPosition, camera.position);
+         } else {
+             console.log("No splat hit on double-click.");
+         }
     }
 
-    // --- Click Listener (Refactored for measurements, scale setting, AND Gizmo Activation) ---
+    // --- Click Listener (Refactored for Gizmo Activation on MULTIPLE Viewers) ---
     function onClick(event) {
         event.preventDefault();
-        console.log(`onClick triggered. Measurement State: ${measurementState}, Transform Mode: ${transformModeActive}`); // Log state
+        // console.log(`onClick triggered. Transform Mode: ${transformModeActive}, Measurement State: ${measurementState}`);
 
-        // 1. Ignore if dragging marker or gizmo
-        if (draggedObject || transformControls.dragging) {
-            console.log("onClick ignored: Drag in progress.");
+        // 1. Ignore if dragging gizmo
+        if (transformControls.dragging) {
+            console.log("onClick ignored: Gizmo drag in progress.");
             return;
         }
 
@@ -798,11 +747,12 @@
             (event.clientX / window.innerWidth) * 2 - 1,
             -(event.clientY / window.innerHeight) * 2 + 1
         );
-        clickRaycaster.setFromCamera(mouse, camera);
+        clickRaycaster.setFromCamera(mouse, camera); // Use the main raycaster
+
 
         // --- Interaction Checks (Prioritized) ---
 
-        // 3. Check Label Click (Scaling) - Only if idle
+        // 3. Check Label Click (Scaling) - Adapt if measurements kept
         let labelHit = false;
         if (measurementState === 'idle') {
             const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
@@ -815,9 +765,9 @@
                 return; // Label click handled
             }
         }
-        console.log(`onClick: Label hit? ${labelHit} (State: ${measurementState})`);
+        // console.log(`onClick: Label hit? ${labelHit} (State: ${measurementState})`);
 
-        // 4. Check Marker Click (Measurement Start/Continue)
+        // 4. Check Marker Click (Measurement Start/Continue) - Adapt if measurements kept
         const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
         let clickedMarker = null;
         if (intersectsMarkers.length > 0) {
@@ -829,16 +779,15 @@
                 clickedMarker = obj;
             }
         }
-        console.log(`onClick: Marker hit? ${!!clickedMarker}`);
+        // console.log(`onClick: Marker hit? ${!!clickedMarker}`);
 
         if (clickedMarker) {
-            console.log("onClick: Marker interaction.");
+            // console.log("onClick: Marker interaction.");
             if (measurementState === 'idle') {
                 startMeasurement(clickedMarker);
                 deactivateTransformMode(); // Deactivate transform mode when starting measurement
             } else if (measurementState === 'measuring') {
                 addPointToMeasurement(clickedMarker);
-                // Transform mode should already be deactivated here
             }
             return; // Marker click handled
         }
@@ -846,24 +795,41 @@
         // --- If not label or marker, check splat or empty space ---
 
         // 5. Check Splat Click (Gizmo Activation / Measurement Cancel)
-        const internalRaycaster = dropInViewer?.viewer?.raycaster;
-        let splatHit = false;
-        if (internalRaycaster && dropInViewer.viewer.splatMesh && dropInViewer.viewer.splatMesh.getSplatCount() > 0) {
-            const rect = renderer.domElement.getBoundingClientRect();
-            const screenPosition = new THREE.Vector2(event.clientX - rect.left, event.clientY - rect.top);
-            renderer.getSize(renderDimensions);
-            outHits.length = 0;
-            internalRaycaster.setFromCameraAndScreenPosition(camera, screenPosition, renderDimensions);
-            internalRaycaster.intersectSplatMesh(dropInViewer.viewer.splatMesh, outHits);
-            if (outHits.length > 0) {
-                splatHit = true;
+        allOutHits.length = 0; // Clear combined hits
+        let hitViewer = null;
+        let closestHitDistance = Infinity;
+
+        // Iterate through all viewers
+        for (let i = 0; i < splatViewers.length; i++) {
+            const viewer = splatViewers[i];
+            const internalRaycaster = viewer?.viewer?.raycaster;
+            const splatMesh = viewer?.viewer?.splatMesh;
+
+            if (!internalRaycaster || !splatMesh || splatMesh.getSplatCount() === 0) {
+                continue; // Skip this viewer if no splats or raycaster
+            }
+
+            const currentViewerHits = []; // Temp storage for this viewer's hits
+
+            // Use the *viewer's* internal intersectSplatMesh method, passing the *main camera's* ray
+            internalRaycaster.ray = clickRaycaster.ray; // Set the ray for the internal raycaster
+            internalRaycaster.intersectSplatMesh(splatMesh, currentViewerHits);
+
+            if (currentViewerHits.length > 0) {
+                // Find the closest hit *for this viewer* (intersectSplatMesh usually sorts by distance)
+                let closestViewerHit = currentViewerHits[0];
+                if (closestViewerHit.distance < closestHitDistance) {
+                    closestHitDistance = closestViewerHit.distance;
+                    hitViewer = viewer; // Store the viewer that had the closest hit overall
+                }
             }
         }
-        console.log(`onClick: Splat hit? ${splatHit}`);
+        // console.log(`onClick: Splat hit? ${!!hitViewer}`);
 
-        if (splatHit) {
-            console.log("onClick: Splat interaction.");
-            // If measuring, cancel the measurement first
+        if (hitViewer) { // If any viewer was hit
+            // console.log("onClick: Splat interaction on viewer:", hitViewer);
+
+            // Cancel measurement if it was active
             if (measurementState === 'measuring') {
                 console.log("onClick: Splat clicked while measuring. Cancelling measurement.");
                 resetMeasurementState(); // Cancel measurement
@@ -871,76 +837,72 @@
 
             // Only attach gizmo if transform mode is active
             if (transformModeActive) {
-                const shouldAttach = transformControls.object !== dropInViewer.viewer.splatMesh;
-                console.log(`onClick: Should attach gizmo (Transform Mode Active)? ${shouldAttach}`);
+                const shouldAttach = activeSplatViewer !== hitViewer; // Attach if different or none selected
+                // console.log(`onClick: Should attach gizmo (Transform Mode Active)? ${shouldAttach}`);
+
                 if (shouldAttach) {
-                    transformControls.attach(dropInViewer.viewer.splatMesh);
+                    detachGizmo(); // Detach from previous, if any
+                    // Attach to the DropInViewer object itself
+                    transformControls.attach(hitViewer);
                     transformControls.visible = true;
                     transformControls.enabled = true;
+                    activeSplatViewer = hitViewer; // Set the active viewer
                     updateTransformModeButtons(transformControls.getMode()); // Update buttons on attach
-                    console.log("onClick: Gizmo attached to splat mesh.");
+                    updateSceneListSelection(activeSplatViewer); // Highlight in list
+                    console.log("onClick: Gizmo attached to selected splat viewer.");
                 }
-                // If already attached, clicking the splat again does nothing (keeps it attached)
+                // If already attached to this viewer, clicking its splats again does nothing (keeps it attached)
             } else {
                  console.log("onClick: Splat clicked, but Transform Mode is not active. Gizmo not attached.");
-                 // Optionally detach if clicking splat while mode is off? For now, do nothing.
-                 // detachGizmo();
             }
             return; // Splat click handled
         }
 
         // 6. Clicked on Empty Space (Gizmo Detach / Measurement Cancel)
-        // This block is reached if it wasn't UI, label, marker, or splat
-        console.log("onClick: Empty space interaction.");
-        // If measuring, cancel the measurement first
+        // console.log("onClick: Empty space interaction.");
         if (measurementState === 'measuring') {
             console.log("onClick: Empty space clicked while measuring. Cancelling measurement.");
             resetMeasurementState(); // Cancel measurement
         }
-        // Detach the gizmo (state is guaranteed to be 'idle')
-        // Also deactivate transform mode when clicking empty space
         deactivateTransformMode(); // Detach gizmo AND deactivate mode
+        updateSceneListSelection(null); // Deselect in list
     }
 
-    // --- Pointer Move Listener (for preview line) ---
+
+    // --- Pointer Move Listener (Adapt if used for measurement preview) ---
     function onPointerMove(event) {
-        // Update NDC
+        // Update NDC (keep if needed for measurements)
         currentMouseNDC.x = (event.clientX / window.innerWidth) * 2 - 1;
         currentMouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-        // Update preview line only if measuring and hovering over a valid marker
+        // Update measurement preview logic if needed...
+        // (May need to raycast against markers more carefully)
         if (measurementState === 'measuring' && currentMeasurementSequence.length > 0) {
             clickRaycaster.setFromCamera(currentMouseNDC, camera);
             const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
 
             let hoveredMarker = null;
             if (intersectsMarkers.length > 0) {
-                // Find the parent group which is the actual marker
                 let obj = intersectsMarkers[0].object;
-                while (obj && !obj.userData.isReferencePoint) {
-                    obj = obj.parent;
-                }
-                // Check if it's a valid marker and not the last one added
+                while (obj && !obj.userData.isReferencePoint) obj = obj.parent;
                 if (obj && obj.userData.isReferencePoint && obj !== currentMeasurementSequence[currentMeasurementSequence.length - 1].marker) {
                     hoveredMarker = obj;
                 }
             }
 
-            if (hoveredMarker) {
-                updatePreviewLine(hoveredMarker.position); // Pass target position
-            } else {
-                updatePreviewLine(null); // Hide preview line
-            }
+            if (hoveredMarker) updatePreviewLine(hoveredMarker.position);
+            else updatePreviewLine(null);
         } else {
-             updatePreviewLine(null); // Ensure preview is hidden if not measuring
+             updatePreviewLine(null);
         }
     }
 
-    // --- Key Down Listener ---
+    // --- Key Down Listener (Keep gizmo controls) ---
     function onKeyDown(event) {
         // Handle gizmo controls if it's attached AND transform mode is active
-        if (transformControls.object && transformModeActive) { // Added transformModeActive check
-            let newMode = null;
+        // NOTE: transformControls.object will now be the DropInViewer instance
+        if (transformControls.object && transformModeActive) {
+             let newMode = null;
             switch (event.key.toLowerCase()) {
                 case 'w': // Translate
                     transformControls.setMode("translate");
@@ -976,6 +938,7 @@
 
         // Handle measurement controls if measuring
         if (measurementState === 'measuring') {
+            // ... (keep measurement key handling as is) ...
             switch (event.key) {
                 case 'Enter':
                 case 'Escape': // ESC also finishes measurement
@@ -989,20 +952,17 @@
                     break;
                 case 'ArrowLeft':
                     currentAxisSnap = 'x';
-                    console.log("Axis Snap: X");
-                    updatePreviewLine(); // Update preview with snap indication
+                    updatePreviewLine();
                     event.preventDefault();
                     break;
-                case 'ArrowRight': // Using Right Arrow for Z as per spec
+                case 'ArrowRight':
                     currentAxisSnap = 'z';
-                    console.log("Axis Snap: Z");
                     updatePreviewLine();
                     event.preventDefault();
                     break;
                 case 'ArrowUp':
                 case 'ArrowDown':
                     currentAxisSnap = 'y';
-                    console.log("Axis Snap: Y");
                     updatePreviewLine();
                     event.preventDefault();
                     break;
@@ -1010,243 +970,167 @@
         }
     }
 
-    // --- Measurement Core Functions ---
-
+    // --- Measurement Core Functions (Keep for now, interaction might need adjustment) ---
     function startMeasurement(startMarker) {
-        if (measurementState !== 'idle') return;
-        measurementState = 'measuring';
-        currentMeasurementSequence = [{ point: startMarker.position.clone(), marker: startMarker }];
-        measurementColorIndex = (measurementColorIndex + 1) % measurementColors.length;
-        currentAxisSnap = null; // Reset axis snap
-        console.log("Started measurement sequence.");
-        // Initialize preview line immediately
-        updatePreviewLine();
+        // ... (keep as is) ...
+         if (measurementState !== 'idle') return;
+         measurementState = 'measuring';
+         currentMeasurementSequence = [{ point: startMarker.position.clone(), marker: startMarker }];
+         measurementColorIndex = (measurementColorIndex + 1) % measurementColors.length;
+         currentAxisSnap = null;
+         console.log("Started measurement sequence.");
+         updatePreviewLine();
     }
 
     function addPointToMeasurement(nextMarker) {
-        if (measurementState !== 'measuring' || currentMeasurementSequence.length === 0) return;
-
-        const startPointInfo = currentMeasurementSequence[currentMeasurementSequence.length - 1];
-        const endPoint = nextMarker.position.clone();
-        const startPoint = startPointInfo.point;
-
-        // Check if closing the loop
-        if (currentMeasurementSequence.length >= 2 && nextMarker === currentMeasurementSequence[0].marker) {
-            // Closing the loop
-            drawMeasurementSegment(startPoint, currentMeasurementSequence[0].point, currentMeasurementSequence[0].marker); // Draw segment to first point
-            finishMeasurement(true); // Finish as closed area
-            return;
-        }
-
-        // Avoid adding the same point consecutively
-        if (nextMarker === startPointInfo.marker) {
-            console.log("Cannot add the same point consecutively.");
-            return;
-        }
-
-        // Draw the segment (potentially with axis snapping)
-        drawMeasurementSegment(startPoint, endPoint, nextMarker);
-
-        // Add the new point to the sequence (handled within drawMeasurementSegment if snapping)
-        if (!currentAxisSnap) { // Only add if not snapping (snapping adds intermediate points)
-             currentMeasurementSequence.push({ point: endPoint, marker: nextMarker });
-        }
-
-        currentAxisSnap = null; // Reset axis snap after adding a point
-        updatePreviewLine(); // Update preview for the next potential segment
+        // ... (keep as is) ...
+         if (measurementState !== 'measuring' || currentMeasurementSequence.length === 0) return;
+         const startPointInfo = currentMeasurementSequence[currentMeasurementSequence.length - 1];
+         const endPoint = nextMarker.position.clone();
+         const startPoint = startPointInfo.point;
+         if (currentMeasurementSequence.length >= 2 && nextMarker === currentMeasurementSequence[0].marker) {
+             drawMeasurementSegment(startPoint, currentMeasurementSequence[0].point, currentMeasurementSequence[0].marker);
+             finishMeasurement(true);
+             return;
+         }
+         if (nextMarker === startPointInfo.marker) {
+             console.log("Cannot add the same point consecutively.");
+             return;
+         }
+         drawMeasurementSegment(startPoint, endPoint, nextMarker);
+         if (!currentAxisSnap) {
+              currentMeasurementSequence.push({ point: endPoint, marker: nextMarker });
+         }
+         currentAxisSnap = null;
+         updatePreviewLine();
     }
 
     function drawMeasurementSegment(p1, p2, endMarker) {
-        const color = measurementColors[measurementColorIndex];
-        let segments = []; // Array to hold {start, end} points for segments
-
-        if (currentAxisSnap) {
-            // --- Axis Snapping Logic ---
-            let intermediatePoints = [p1.clone()];
-            let current = p1.clone();
-            const target = p2.clone();
-            const delta = target.clone().sub(current);
-
-            // For axis snapping, create orthogonal segments based on which axis was selected
-            if (currentAxisSnap === 'x') {
-                // Move along X first, then Y, then Z
-                let p = current.clone();
-                p.x = target.x;  // Move to target X
-                if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
-                
-                p.y = target.y;  // Then move to target Y
-                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
-                    intermediatePoints.push(p.clone());
-                
-                p.z = target.z;  // Then move to target Z
-                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
-                    intermediatePoints.push(p.clone());
-            } 
-            else if (currentAxisSnap === 'y') {
-                // Move along Y first, then X, then Z
-                let p = current.clone();
-                p.y = target.y;  // Move to target Y
-                if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
-                
-                p.x = target.x;  // Then move to target X
-                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
-                    intermediatePoints.push(p.clone());
-                
-                p.z = target.z;  // Then move to target Z
-                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
-                    intermediatePoints.push(p.clone());
-            }
-            else if (currentAxisSnap === 'z') {
-                // Move along Z first, then X, then Y
-                let p = current.clone();
-                p.z = target.z;  // Move to target Z
-                if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
-                
-                p.x = target.x;  // Then move to target X
-                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
-                    intermediatePoints.push(p.clone());
-                
-                p.y = target.y;  // Then move to target Y
-                if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) 
-                    intermediatePoints.push(p.clone());
-            }
-
-            // Create segments from intermediate points
-            for (let i = 0; i < intermediatePoints.length - 1; i++) {
-                segments.push({ start: intermediatePoints[i], end: intermediatePoints[i+1] });
-            }
-
-            // Add intermediate points and final point to sequence
-            // Skip the very first point (p1) as it's already there
-            for (let i = 1; i < intermediatePoints.length; i++) {
-                 // Use the endMarker only for the very last point added by snapping
-                 const markerForPoint = (i === intermediatePoints.length - 1) ? endMarker : null;
-                 currentMeasurementSequence.push({ point: intermediatePoints[i], marker: markerForPoint });
-            }
-
-        } else {
-            // --- No Axis Snapping ---
-            segments.push({ start: p1, end: p2 });
-            // The calling function (addPointToMeasurement) will add p2 to the sequence
-        }
-
-        // --- Draw Lines and Labels for each segment ---
-        segments.forEach(seg => {
-            const distance = seg.start.distanceTo(seg.end) * scaleFactor;
-            if (distance < 1e-6) return; // Skip zero-length segments
-
-            const geometry = new THREE.BufferGeometry().setFromPoints([seg.start, seg.end]);
-            const material = new THREE.LineBasicMaterial({ color: color, linewidth: 2 }); // Linewidth might not work on all systems
-            const line = new THREE.Line(geometry, material);
-            line.userData.isMeasurementLine = true;
-            line.userData.colorIndex = measurementColorIndex; // Store color index
-            measurementGroup.add(line);
-
-            const label = createDistanceLabel(distance.toFixed(2), color); // Use scaleFactor
-            label.position.copy(seg.start).lerp(seg.end, 0.5); // Position at midpoint
-            label.userData.isDistanceLabel = true;
-            label.userData.segmentStart = seg.start.clone(); // Store segment points for scaling
-            label.userData.segmentEnd = seg.end.clone();
-            label.userData.colorIndex = measurementColorIndex;
-            measurementGroup.add(label);
-
-            // Associate line and label with the *starting* point of this segment in the sequence
-            // Find the sequence entry corresponding to seg.start
-             const sequenceEntry = currentMeasurementSequence.find(entry => entry.point.equals(seg.start));
-             if (sequenceEntry) {
-                 if (!sequenceEntry.segments) sequenceEntry.segments = [];
-                 sequenceEntry.segments.push({ line: line, label: label });
-             } else {
-                 console.warn("Could not find sequence entry for segment start:", seg.start);
-                 // Fallback: associate with the last entry (less accurate for snapping)
-                 const lastEntry = currentMeasurementSequence[currentMeasurementSequence.length - 1];
-                 if (!lastEntry.segments) lastEntry.segments = [];
-                 lastEntry.segments.push({ line: line, label: label });
+        // ... (keep as is) ...
+         const color = measurementColors[measurementColorIndex];
+         let segments = [];
+         if (currentAxisSnap) {
+             let intermediatePoints = [p1.clone()];
+             let current = p1.clone();
+             const target = p2.clone();
+             if (currentAxisSnap === 'x') {
+                 let p = current.clone(); p.x = target.x;
+                 if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
+                 p.y = target.y;
+                 if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) intermediatePoints.push(p.clone());
+                 p.z = target.z;
+                 if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) intermediatePoints.push(p.clone());
+             } else if (currentAxisSnap === 'y') {
+                 let p = current.clone(); p.y = target.y;
+                 if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
+                 p.x = target.x;
+                 if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) intermediatePoints.push(p.clone());
+                 p.z = target.z;
+                 if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) intermediatePoints.push(p.clone());
+             } else if (currentAxisSnap === 'z') {
+                 let p = current.clone(); p.z = target.z;
+                 if (p.distanceToSquared(current) > 1e-6) intermediatePoints.push(p.clone());
+                 p.x = target.x;
+                 if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) intermediatePoints.push(p.clone());
+                 p.y = target.y;
+                 if (p.distanceToSquared(intermediatePoints[intermediatePoints.length-1]) > 1e-6) intermediatePoints.push(p.clone());
              }
-        });
+             for (let i = 0; i < intermediatePoints.length - 1; i++) {
+                 segments.push({ start: intermediatePoints[i], end: intermediatePoints[i+1] });
+             }
+             for (let i = 1; i < intermediatePoints.length; i++) {
+                  const markerForPoint = (i === intermediatePoints.length - 1) ? endMarker : null;
+                  currentMeasurementSequence.push({ point: intermediatePoints[i], marker: markerForPoint });
+             }
+         } else {
+             segments.push({ start: p1, end: p2 });
+         }
+         segments.forEach(seg => {
+             const distance = seg.start.distanceTo(seg.end) * scaleFactor;
+             if (distance < 1e-6) return;
+             const geometry = new THREE.BufferGeometry().setFromPoints([seg.start, seg.end]);
+             const material = new THREE.LineBasicMaterial({ color: color, linewidth: 2 });
+             const line = new THREE.Line(geometry, material);
+             line.userData.isMeasurementLine = true;
+             line.userData.colorIndex = measurementColorIndex;
+             measurementGroup.add(line);
+             const label = createDistanceLabel(distance.toFixed(2), color);
+             label.position.copy(seg.start).lerp(seg.end, 0.5);
+             label.userData.isDistanceLabel = true;
+             label.userData.segmentStart = seg.start.clone();
+             label.userData.segmentEnd = seg.end.clone();
+             label.userData.colorIndex = measurementColorIndex;
+             measurementGroup.add(label);
+              const sequenceEntry = currentMeasurementSequence.find(entry => entry.point.equals(seg.start));
+              if (sequenceEntry) {
+                  if (!sequenceEntry.segments) sequenceEntry.segments = [];
+                  sequenceEntry.segments.push({ line: line, label: label });
+              } else {
+                  console.warn("Could not find sequence entry for segment start:", seg.start);
+                  const lastEntry = currentMeasurementSequence[currentMeasurementSequence.length - 1];
+                  if (!lastEntry.segments) lastEntry.segments = [];
+                  lastEntry.segments.push({ line: line, label: label });
+              }
+         });
     }
 
     function finishMeasurement(closed) {
-        if (measurementState !== 'measuring' || currentMeasurementSequence.length < (closed ? 3 : 2)) {
-            // Need at least 3 points for area, 2 for path
-            console.log("Not enough points to finish measurement.");
-            resetMeasurementState();
-            return;
-        }
-
-        const color = measurementColors[measurementColorIndex];
-        let totalLength = 0;
-        let lastPoint = currentMeasurementSequence[0].point;
-
-        // Calculate total length by summing segment distances associated with points
-        for (let i = 0; i < currentMeasurementSequence.length; i++) {
-            const entry = currentMeasurementSequence[i];
-            if (entry.segments) {
-                entry.segments.forEach(segData => {
-                    // Extract distance from label text (assuming format "value")
-                    const dist = parseFloat(segData.label.userData.text);
-                    if (!isNaN(dist)) {
-                        totalLength += dist;
-                    }
-                });
-            }
-        }
-
-
-        if (closed) {
-            // --- Calculate Area ---
-            const points2D = projectPointsToPlane(currentMeasurementSequence.map(p => p.point));
-            const area = calculatePolygonArea(points2D) * (scaleFactor * scaleFactor); // Apply scale factor squared for area
-
-            if (area > 1e-6) {
-                const areaLabel = createDistanceLabel(`Area: ${area.toFixed(2)}`, color, 14); // Slightly larger font for area
-                // Calculate centroid for label position
-                const centroid = new THREE.Vector3();
-                currentMeasurementSequence.forEach(p => centroid.add(p.point));
-                centroid.divideScalar(currentMeasurementSequence.length);
-                areaLabel.position.copy(centroid);
-                areaLabel.userData.isAreaLabel = true;
-                areaLabel.userData.colorIndex = measurementColorIndex;
-                measurementGroup.add(areaLabel);
-                // Store area label reference (e.g., with the first point)
-                currentMeasurementSequence[0].areaLabel = areaLabel;
-            }
-             console.log(`Finished measurement (Closed Area): ${area.toFixed(2)}, Total Length: ${totalLength.toFixed(2)}`);
-
-        } else {
-             console.log(`Finished measurement (Open Path): Total Length: ${totalLength.toFixed(2)}`);
-             // Optionally add a "Total Length" label at the end point?
-        }
-
-
-        resetMeasurementState();
+        // ... (keep as is) ...
+         if (measurementState !== 'measuring' || currentMeasurementSequence.length < (closed ? 3 : 2)) {
+             resetMeasurementState(); return;
+         }
+         const color = measurementColors[measurementColorIndex];
+         let totalLength = 0;
+         for (let i = 0; i < currentMeasurementSequence.length; i++) {
+             const entry = currentMeasurementSequence[i];
+             if (entry.segments) {
+                 entry.segments.forEach(segData => {
+                     const dist = parseFloat(segData.label.userData.text);
+                     if (!isNaN(dist)) totalLength += dist;
+                 });
+             }
+         }
+         if (closed) {
+             const points2D = projectPointsToPlane(currentMeasurementSequence.map(p => p.point));
+             const area = calculatePolygonArea(points2D) * (scaleFactor * scaleFactor);
+             if (area > 1e-6) {
+                 const areaLabel = createDistanceLabel(`Area: ${area.toFixed(2)}`, color, 14);
+                 const centroid = new THREE.Vector3();
+                 currentMeasurementSequence.forEach(p => centroid.add(p.point));
+                 centroid.divideScalar(currentMeasurementSequence.length);
+                 areaLabel.position.copy(centroid);
+                 areaLabel.userData.isAreaLabel = true;
+                 areaLabel.userData.colorIndex = measurementColorIndex;
+                 measurementGroup.add(areaLabel);
+                 currentMeasurementSequence[0].areaLabel = areaLabel;
+             }
+              console.log(`Finished measurement (Closed Area): ${area.toFixed(2)}, Total Length: ${totalLength.toFixed(2)}`);
+         } else {
+              console.log(`Finished measurement (Open Path): Total Length: ${totalLength.toFixed(2)}`);
+         }
+         resetMeasurementState();
     }
 
     function resetMeasurementState() {
+        // ... (keep as is) ...
         measurementState = 'idle';
         currentMeasurementSequence = [];
         currentAxisSnap = null;
         if (previewLine) {
             measurementGroup.remove(previewLine);
-            // Dispose geometry and material if they exist
             if (previewLine.geometry) previewLine.geometry.dispose();
             if (previewLine.material) previewLine.material.dispose();
             previewLine = null;
         }
-        console.log("Measurement state reset to idle."); // Updated log message
-        // Do NOT deactivate transform mode here, only when explicitly done or interacting elsewhere
+        console.log("Measurement state reset to idle.");
     }
 
     function removeLastMeasurementSegment() {
+        // ... (keep as is) ...
         if (measurementState !== 'measuring' || currentMeasurementSequence.length <= 1) {
-             // If only the start point exists, cancel the measurement
-             if (currentMeasurementSequence.length === 1) {
-                 resetMeasurementState();
-             }
+             if (currentMeasurementSequence.length === 1) resetMeasurementState();
              return;
         }
-
-        // Find the last entry that has segment data associated with it
         let entryToRemoveSegmentsFrom = null;
         for (let i = currentMeasurementSequence.length - 1; i >= 0; i--) {
             if (currentMeasurementSequence[i].segments && currentMeasurementSequence[i].segments.length > 0) {
@@ -1254,188 +1138,112 @@
                 break;
             }
         }
-
         if (!entryToRemoveSegmentsFrom) {
-             console.warn("Could not find previous entry with segments to remove.");
-             // As a fallback, just remove the last point added?
-             currentMeasurementSequence.pop();
-             updatePreviewLine();
-             return;
+             currentMeasurementSequence.pop(); updatePreviewLine(); return;
         }
-
-
-        // Remove the last segment (line and label) associated with that entry
         const lastSegmentData = entryToRemoveSegmentsFrom.segments.pop();
         if (lastSegmentData) {
             measurementGroup.remove(lastSegmentData.line);
             measurementGroup.remove(lastSegmentData.label);
             lastSegmentData.line.geometry.dispose();
             lastSegmentData.line.material.dispose();
-            disposeLabel(lastSegmentData.label); // Helper to dispose canvas/texture
+            disposeLabel(lastSegmentData.label);
         }
-
-        // Remove the point(s) added by the last operation (could be multiple if snapped)
-        // Find the index of the entry we just modified
         const startIndexToRemove = currentMeasurementSequence.indexOf(entryToRemoveSegmentsFrom);
-
-        // Remove all points *after* this entry, as they were part of the removed segment(s)
         if (startIndexToRemove < currentMeasurementSequence.length -1) {
              currentMeasurementSequence.splice(startIndexToRemove + 1);
         }
-
-
         console.log("Removed last measurement segment/point(s).");
-        updatePreviewLine(); // Update preview from the new last point
+        updatePreviewLine();
     }
 
-    // Modified to accept an optional target point
-    function updatePreviewLine(targetPoint = null) { // Default to null
-        // Hide and return if no target point or not measuring
-        if (!targetPoint || measurementState !== 'measuring' || currentMeasurementSequence.length === 0) {
-            if (previewLine) {
-                previewLine.visible = false; // Just hide, reuse geometry/material
-            }
-            return;
-        }
-
-        const lastPoint = currentMeasurementSequence[currentMeasurementSequence.length - 1].point;
-        const color = measurementColors[measurementColorIndex];
-
-        // Apply axis snapping preview if active, using the targetPoint from hover
-        let previewEndPoint = targetPoint.clone(); // Start with the hovered marker's position
-        if (currentAxisSnap) {
-             const delta = previewEndPoint.clone().sub(lastPoint); // Vector from last point to target
-             previewEndPoint = lastPoint.clone(); // Start preview from last point
-
-             // Project delta onto the snapped axis/axes (simplified example for single axis)
-             // A more complex version would handle multi-segment snapping preview
-             if (currentAxisSnap === 'x') {
-                 previewEndPoint.x += delta.x;
-             } else if (currentAxisSnap === 'y') {
-                 previewEndPoint.y += delta.y;
-             } else if (currentAxisSnap === 'z') {
-                 previewEndPoint.z += delta.z;
-             }
-             // Note: This simplified preview for snapping shows a direct line along the snapped axis's delta component.
-             // A full preview of the multi-segment snapped path is more complex.
-        }
-
-
-        if (!previewLine) {
-            const geometry = new THREE.BufferGeometry().setFromPoints([lastPoint, previewEndPoint]);
-            const material = new THREE.LineDashedMaterial({
-                color: color,
-                linewidth: 1,
-                scale: 1,
-                dashSize: 0.1,
-                gapSize: 0.05,
-            });
-            previewLine = new THREE.Line(geometry, material);
-            previewLine.computeLineDistances(); // Important for dashed lines
-            measurementGroup.add(previewLine);
-        } else {
-            previewLine.geometry.setFromPoints([lastPoint, previewEndPoint]);
-            previewLine.geometry.attributes.position.needsUpdate = true;
-            previewLine.computeLineDistances(); // Recompute for dashed lines
-            previewLine.material.color.setHex(color); // Ensure color is correct
-            previewLine.visible = true; // Make sure it's visible
-        }
+    function updatePreviewLine(targetPoint = null) {
+        // ... (keep as is) ...
+         if (!targetPoint || measurementState !== 'measuring' || currentMeasurementSequence.length === 0) {
+             if (previewLine) previewLine.visible = false;
+             return;
+         }
+         const lastPoint = currentMeasurementSequence[currentMeasurementSequence.length - 1].point;
+         const color = measurementColors[measurementColorIndex];
+         let previewEndPoint = targetPoint.clone();
+         if (currentAxisSnap) {
+              const delta = previewEndPoint.clone().sub(lastPoint);
+              previewEndPoint = lastPoint.clone();
+              if (currentAxisSnap === 'x') previewEndPoint.x += delta.x;
+              else if (currentAxisSnap === 'y') previewEndPoint.y += delta.y;
+              else if (currentAxisSnap === 'z') previewEndPoint.z += delta.z;
+         }
+         if (!previewLine) {
+             const geometry = new THREE.BufferGeometry().setFromPoints([lastPoint, previewEndPoint]);
+             const material = new THREE.LineDashedMaterial({ color: color, linewidth: 1, scale: 1, dashSize: 0.1, gapSize: 0.05 });
+             previewLine = new THREE.Line(geometry, material);
+             previewLine.computeLineDistances();
+             measurementGroup.add(previewLine);
+         } else {
+             previewLine.geometry.setFromPoints([lastPoint, previewEndPoint]);
+             previewLine.geometry.attributes.position.needsUpdate = true;
+             previewLine.computeLineDistances();
+             previewLine.material.color.setHex(color);
+             previewLine.visible = true;
+         }
     }
 
     // --- Helper Functions ---
-
     function createDistanceLabel(text, colorHex, fontSize = 12) {
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        context.font = `Bold ${fontSize}px Arial`; // Use Arial or sans-serif
-
-        // Measure text width for canvas sizing
-        const textMetrics = context.measureText(text);
-        const textWidth = textMetrics.width;
-        const padding = 8; // Add padding
-
-        canvas.width = textWidth + padding * 2;
-        canvas.height = fontSize + padding * 2; // Adjust height based on font size and padding
-
-        // Re-apply font after resizing canvas (important!)
-        context.font = `Bold ${fontSize}px Arial`;
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-
-        // Background
-        context.fillStyle = `#${colorHex.toString(16).padStart(6, '0')}`; // Use hex color for background
-        context.globalAlpha = 0.7; // Semi-transparent background
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        context.globalAlpha = 1.0; // Reset alpha
-
-        // Text
-        context.fillStyle = '#ffffff'; // White text
-        context.fillText(text, canvas.width / 2, canvas.height / 2);
-
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.needsUpdate = true;
-
-        const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
-        const sprite = new THREE.Sprite(material);
-
-        // Scale sprite based on canvas aspect ratio to avoid distortion
-        const aspect = canvas.width / canvas.height;
-        sprite.scale.set(0.05 * aspect, 0.05, 1); // Adjust base scale (0.2) as needed
-
-        sprite.renderOrder = 1; // Render labels on top
-        sprite.userData.text = text; // Store text for potential updates/parsing
-
-        return sprite;
+        // ... (keep as is) ...
+         const canvas = document.createElement('canvas');
+         const context = canvas.getContext('2d');
+         context.font = `Bold ${fontSize}px Arial`;
+         const textMetrics = context.measureText(text);
+         const textWidth = textMetrics.width;
+         const padding = 8;
+         canvas.width = textWidth + padding * 2;
+         canvas.height = fontSize + padding * 2;
+         context.font = `Bold ${fontSize}px Arial`;
+         context.textAlign = 'center';
+         context.textBaseline = 'middle';
+         context.fillStyle = `#${colorHex.toString(16).padStart(6, '0')}`;
+         context.globalAlpha = 0.7;
+         context.fillRect(0, 0, canvas.width, canvas.height);
+         context.globalAlpha = 1.0;
+         context.fillStyle = '#ffffff';
+         context.fillText(text, canvas.width / 2, canvas.height / 2);
+         const texture = new THREE.CanvasTexture(canvas);
+         texture.needsUpdate = true;
+         const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+         const sprite = new THREE.Sprite(material);
+         const aspect = canvas.width / canvas.height;
+         sprite.scale.set(0.05 * aspect, 0.05, 1);
+         sprite.renderOrder = 1;
+         sprite.userData.text = text;
+         return sprite;
     }
 
     function disposeLabel(labelSprite) {
+        // ... (keep as is) ...
         if (labelSprite && labelSprite.material) {
-            if (labelSprite.material.map) {
-                labelSprite.material.map.dispose();
-            }
+            if (labelSprite.material.map) labelSprite.material.map.dispose();
             labelSprite.material.dispose();
         }
-        // Geometry is implicitly handled for Sprites
     }
 
     function projectPointsToPlane(points) {
-        // More robust plane calculation that finds the best-fit plane
+        // ... (keep as is) ...
         if (points.length < 3) return [];
-        
-        // Find the normal of the best-fit plane
-        // For simplicity, we'll use the cross product of two edges
-        // A more robust solution would use PCA or SVD
         const v1 = new THREE.Vector3().subVectors(points[1], points[0]);
         const v2 = new THREE.Vector3().subVectors(points[2], points[0]);
         const normal = new THREE.Vector3().crossVectors(v1, v2).normalize();
-        
-        // If the normal is close to zero, fall back to XY projection
-        if (normal.lengthSq() < 0.1) {
-            return points.map(p => new THREE.Vector2(p.x, p.y));
-        }
-        
-        // Find the most aligned world axis to project onto
-        const absX = Math.abs(normal.x);
-        const absY = Math.abs(normal.y);
-        const absZ = Math.abs(normal.z);
-        
+        if (normal.lengthSq() < 0.1) return points.map(p => new THREE.Vector2(p.x, p.y));
+        const absX = Math.abs(normal.x), absY = Math.abs(normal.y), absZ = Math.abs(normal.z);
         let projectedPoints;
-        if (absZ >= absX && absZ >= absY) {
-            // Project onto XY plane
-            projectedPoints = points.map(p => new THREE.Vector2(p.x, p.y));
-        } else if (absY >= absX && absY >= absZ) {
-            // Project onto XZ plane
-            projectedPoints = points.map(p => new THREE.Vector2(p.x, p.z));
-        } else {
-            // Project onto YZ plane
-            projectedPoints = points.map(p => new THREE.Vector2(p.y, p.z));
-        }
-        
+        if (absZ >= absX && absZ >= absY) projectedPoints = points.map(p => new THREE.Vector2(p.x, p.y));
+        else if (absY >= absX && absY >= absZ) projectedPoints = points.map(p => new THREE.Vector2(p.x, p.z));
+        else projectedPoints = points.map(p => new THREE.Vector2(p.y, p.z));
         return projectedPoints;
     }
 
     function calculatePolygonArea(points2D) {
-        // Shoelace formula for polygon area
+        // ... (keep as is) ...
         let area = 0;
         for (let i = 0; i < points2D.length; i++) {
             const j = (i + 1) % points2D.length;
@@ -1446,81 +1254,51 @@
     }
 
     function setReferenceScale(clickedLabel) {
-        const currentText = clickedLabel.userData.text;
-        const currentValue = parseFloat(currentText); // Extract numeric value
-
-        if (isNaN(currentValue) || !clickedLabel.userData.segmentStart || !clickedLabel.userData.segmentEnd) {
-            console.error("Invalid label data for scaling.");
-            return;
-        }
-
-        const newScaleInput = prompt(`Set reference distance for this segment (current: ${currentValue.toFixed(2)}):`, currentValue.toFixed(2));
-        if (newScaleInput === null) return; // User cancelled
-
-        const newReferenceValue = parseFloat(newScaleInput);
-        if (isNaN(newReferenceValue) || newReferenceValue <= 0) {
-            alert("Invalid reference distance. Please enter a positive number.");
-            return;
-        }
-
-        // Calculate the original Three.js distance for this segment
-        const originalDistance = clickedLabel.userData.segmentStart.distanceTo(clickedLabel.userData.segmentEnd);
-
-        if (originalDistance < 1e-6) {
-             alert("Cannot set scale based on a zero-length segment.");
-             return;
-        }
-
-        // Calculate the new global scale factor
-        scaleFactor = newReferenceValue / originalDistance;
-
-        console.log(`New scale factor set: ${scaleFactor}`);
-        updateAllMeasurementLabels(); // Update all existing labels
+        // ... (keep as is) ...
+         const currentText = clickedLabel.userData.text;
+         const currentValue = parseFloat(currentText);
+         if (isNaN(currentValue) || !clickedLabel.userData.segmentStart || !clickedLabel.userData.segmentEnd) return;
+         const newScaleInput = prompt(`Set reference distance for this segment (current: ${currentValue.toFixed(2)}):`, currentValue.toFixed(2));
+         if (newScaleInput === null) return;
+         const newReferenceValue = parseFloat(newScaleInput);
+         if (isNaN(newReferenceValue) || newReferenceValue <= 0) { alert("Invalid distance."); return; }
+         const originalDistance = clickedLabel.userData.segmentStart.distanceTo(clickedLabel.userData.segmentEnd);
+         if (originalDistance < 1e-6) { alert("Cannot scale zero-length segment."); return; }
+         scaleFactor = newReferenceValue / originalDistance;
+         console.log(`New scale factor set: ${scaleFactor}`);
+         updateAllMeasurementLabels();
     }
 
     function updateAllMeasurementLabels() {
+        // ... (keep as is) ...
         measurementGroup.children.forEach(child => {
             if (child.userData.isDistanceLabel && child.userData.segmentStart && child.userData.segmentEnd) {
                 const originalDistance = child.userData.segmentStart.distanceTo(child.userData.segmentEnd);
                 const scaledDistance = originalDistance * scaleFactor;
                 const newText = scaledDistance.toFixed(2);
-                // Recreate label with new text (simplest way to update canvas texture)
-                const color = child.material.map.image.getContext('2d').fillStyle; // Attempt to get color (might be tricky)
-                const colorIndex = child.userData.colorIndex ?? 0; // Fallback color index
+                const colorIndex = child.userData.colorIndex ?? 0;
                 const newLabel = createDistanceLabel(newText, measurementColors[colorIndex]);
                 newLabel.position.copy(child.position);
-                newLabel.userData = { ...child.userData }; // Copy user data
-                newLabel.userData.text = newText; // Update text in user data
-
+                newLabel.userData = { ...child.userData, text: newText };
                 measurementGroup.remove(child);
                 disposeLabel(child);
                 measurementGroup.add(newLabel);
-
             } else if (child.userData.isAreaLabel) {
-                // Find the corresponding sequence to recalculate area
-                // This requires better linking between area labels and sequences, difficult without storing sequence data on label
-                // Simple approach: Remove and let user recalculate area if scale changes significantly
-                 console.warn("Area label update after scaling not fully implemented. Please clear and remeasure area if needed.");
-                 // measurementGroup.remove(child);
-                 // disposeLabel(child);
+                 console.warn("Area label update after scaling not fully implemented.");
             }
         });
     }
 
     function clearReferencePoints() {
-        if (confirm("Are you sure you want to clear ALL reference points? This cannot be undone.")) {
-            // Remove markers from the group and scene
-            while (markerGroup.children.length > 0) {
-                const marker = markerGroup.children[0];
-                // DragControls might hold references, dispose might be needed if issues arise
-                markerGroup.remove(marker);
-                // Dispose geometry/material if they were unique per marker (not the case here)
-            }
-            console.log("All reference points cleared.");
-            // Deactivate transform mode and detach gizmo
-            deactivateTransformMode(); // Use helper function (already hides options)
-        }
-        // No need for the extra detachGizmo call outside the confirmation block
+         if (confirm("Are you sure you want to clear ALL reference points? This cannot be undone.")) {
+             while (markerGroup.children.length > 0) {
+                 markerGroup.remove(markerGroup.children[0]);
+             }
+             console.log("All reference points cleared.");
+             // Also clear measurements that depend on these points
+             clearMeasurements(false); // Clear without asking again
+             deactivateTransformMode(); // Ensure gizmo is off
+         }
     }
 
     function clearMeasurements(askConfirmation = true) {
@@ -1528,45 +1306,24 @@
          if (askConfirmation) {
              confirmed = confirm("Are you sure you want to clear ALL measurements? This cannot be undone.");
          }
-
         if (confirmed) {
-            // Remove lines and labels from the measurement group
             const toRemove = [];
             measurementGroup.children.forEach(child => {
                  if (child.userData.isMeasurementLine || child.userData.isDistanceLabel || child.userData.isAreaLabel || child === previewLine) {
                      toRemove.push(child);
                  }
             });
-
             toRemove.forEach(child => {
                 measurementGroup.remove(child);
-                if (child.isLine) {
-                    child.geometry.dispose();
-                    child.material.dispose();
-                } else if (child.isSprite) {
-                    disposeLabel(child);
-                }
+                if (child.isLine) { child.geometry.dispose(); child.material.dispose(); }
+                else if (child.isSprite) { disposeLabel(child); }
             });
-
-            resetMeasurementState(); // Ensure state is idle
+            resetMeasurementState();
             console.log("All measurements cleared.");
-            // Deactivate transform mode and detach gizmo
-            deactivateTransformMode(); // Use helper function (already hides options)
+            deactivateTransformMode(); // Ensure gizmo is off
         }
-         // No need for the extra detachGizmo call outside the confirmation block
     }
 
-    // Helper to clean up measurements if a point is deleted (basic version)
-    function cleanupMeasurementsForPoint(deletedMarker) {
-         // This function is no longer called when double-clicking a marker.
-         // It might still be relevant if the "Clear Reference Points" button behavior needs adjustment,
-         // but currently, that button also calls clearMeasurements directly.
-         console.warn("Reference point deleted. Measurements are NOT automatically cleared.");
-         // clearMeasurements(false); // Keep this commented out or remove if cleanup is never desired
-    }
-
-    // --- Click-to-Spawn Reference Point Feature ---
-    // The redundant code has been removed (duplicate createCrossMarkerAtPosition function and other duplicated code)
   </script>
 </body>
 </html>
