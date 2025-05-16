@@ -908,6 +908,18 @@
         currentMouseNDC.x = (event.clientX / window.innerWidth) * 2 - 1;
         currentMouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
+        // Change cursor to pointer when hovering over a distance label in idle state
+        let cursorStyle = 'crosshair';
+        if (measurementState === 'idle') {
+            clickRaycaster.setFromCamera(currentMouseNDC, camera);
+            const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
+                .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel);
+            if (intersectsLabels.length > 0) {
+                cursorStyle = 'pointer';
+            }
+        }
+        renderer.domElement.style.cursor = cursorStyle;
+
         // Update preview line only if measuring and hovering over a valid marker
         if (measurementState === 'measuring' && currentMeasurementSequence.length > 0) {
             clickRaycaster.setFromCamera(currentMouseNDC, camera);
