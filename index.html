@@ -724,19 +724,23 @@
 
     function onDoubleClick(event) {
         event.preventDefault();
-        // Check if the click is on the UI panel.
+
+        // 1. Check if the click is on the UI panel first.
         const containerRect = document.getElementById('container').getBoundingClientRect();
         if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
             event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
             return; // Click is inside the UI panel
         }
 
-        // Check if double-clicking an existing marker (to delete it)
+        // 2. Check if double-clicking an existing marker (to delete it).
+        // This check is done before checking measurementState for finishing,
+        // to correctly handle deleting a marker when idle, even if the dblclick's
+        // own preceding click events briefly started a measurement.
         const mouse = new THREE.Vector2(
             (event.clientX / window.innerWidth) * 2 - 1,
             -(event.clientY / window.innerHeight) * 2 + 1
         );
-        clickRaycaster.setFromCamera(mouse, camera); // Use clickRaycaster
+        clickRaycaster.setFromCamera(mouse, camera);
         const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
 
         if (intersectsMarkers.length > 0) {
@@ -745,14 +749,31 @@
                 const crossToRemove = intersectedObject.parent;
                 markerGroup.remove(crossToRemove);
                 console.log("Reference Point removed by double-click.");
-                return; // Don't proceed to splat raycasting
+
+                // If a measurement was active (e.g., started by the first click of this dblclick)
+                if (measurementState === 'measuring') {
+                    resetMeasurementState(); // Cancel it
+                    console.log("Measurement cancelled due to deleting a reference point during dblclick.");
+                }
+                return; // Marker deleted, action complete.
             }
         }
 
+        // 3. If measuring (and not UI click, and not marker deletion), finish measurement.
+        // This means a double-click on empty space (or a splat, if not placing new point)
+        // while measuring will finish it.
+        if (measurementState === 'measuring') {
+            finishMeasurement(false); // Finish as open path
+            console.log("Measurement finished by double-click (on non-marker or empty space).");
+            return; // Stop further processing
+        }
+
+        // 4. If idle & not UI & not marker deletion: Place new point.
+        // (This part is only reached if not measuring, not UI click, and not deleting existing marker)
         // --- Raycast against splats to place a NEW point ---
         const internalRaycaster = dropInViewer?.viewer?.raycaster;
         if (!internalRaycaster || !dropInViewer.viewer.splatMesh || dropInViewer.viewer.splatMesh.getSplatCount() === 0) {
-            console.log("No splats loaded or raycaster not ready for placing point.");
+            console.log("No splats loaded or raycaster not ready for placing point on double-click.");
             return;
         }
 
@@ -770,7 +791,7 @@
             // controls.target.copy(hitPosition);
             // controls.update();
         } else {
-            console.log("No splat hit on double-click.");
+            console.log("No splat hit on double-click (for new point placement).");
         }
     }
 
