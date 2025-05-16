@@ -1,32 +1,67 @@
-# TemplateJs
-TemplateJs is a minimal single-page web app template designed for quick deployment. 
-It follows an AI-assisted iterative development process:
+# SplatLabJs
 
-- User stories and requirements drive feature development.
-- Each iteration is a single commit for easy review.
-- AI-assisted coding minimizes manual intervention.
-- The focus is on defining clear requirements rather than manual coding.
+**3D Gaussian Splat Viewer – Multiple Scenes**
 
-This approach enables rapid prototyping and structured iteration.
+SplatLabJs is a web-based viewer for 3D Gaussian Splat scenes, supporting multiple scene loading, interactive measurement tools, and transform controls. Built with [Three.js](https://threejs.org/) and [gaussian-splats-3d](lib/gaussian-splats-3d.module.js), it provides a modern UI for exploring and analyzing splat-based 3D data.
 
-## Using the Template
-1. Fork this repository and open the fork via GitHub CodeSpaces
-2. Go to your repos Settings -> Pages and there in the "Branch" section select the main branch to be auto-deployed by GitHub for you
-3. If your fork is 
-   <br> github.com/**YourUserName**/**YourFork** 
-   <br> then your WebApp should now be live at 
-   <br> **YourUserName**.github.io/**YourFork** 
-4. Install VsCode plugins in CodeSpaces
-   - "**Live Server**" to render the resulting page including live updates while you edit etc
-   - "**GitHub Copilot**" to do smaller iterations inside of CodeSpaces
-5. Edit the index.html and regularly commit and push in CodeSpaces to "release" your latest app version 
+**Live Demo:**  
+👉 [https://cs-util-com.github.io/SplatLabJs/](https://cs-util-com.github.io/SplatLabJs/)
 
-## AI Iteration Workflow
-1. Copy `index.html` into ChatGPT.
-2. Modify or extend the requirements listed at the top
-3. Test the changes via Right-Click on the index.html -> "Open with Live Server"
-4. Clean up modifications done by the AI via the "Source Control" -> "Changes" UX of VsCode (in GitHub CodeSpaces)
-5. Commit
+---
 
-## Disclaimer
-TemplateJs is provided as-is. It is a general-purpose template and does not include domain-specific functionality. Use and modify as needed.
+## Features
+
+- **Multiple Scene Support:** Load and switch between several 3D Gaussian Splat scenes in one session.
+- **Interactive 3D Controls:**
+  - Orbit, pan, and zoom with mouse (Three.js OrbitControls)
+  - Field of View (FOV) slider for camera adjustment
+  - Background color picker
+- **Transform Gizmo:**
+  - Move, rotate, and scale loaded splat scenes with a visual gizmo (TransformControls)
+  - Toggle transform mode and select operation (translate/rotate/scale)
+- **Measurement Tools:**
+  - Place reference points in 3D space
+  - Measure distances and areas interactively
+  - Set real-world scale using reference labels
+  - Clear points and measurements with dedicated buttons
+- **Scene List Panel:**
+  - View and select loaded scenes
+  - Highlight active scene for transformation or measurement
+- **Modern UI:**
+  - Responsive layout with [Tailwind CSS](https://tailwindcss.com/)
+  - Minimal, accessible controls
+
+---
+
+## Usage
+
+1. **Open `index.html` in a modern browser.**
+2. **Load a 3D Gaussian Splat file:**
+   - Use the file input to select a `.splat` or compatible file.
+   - Adjust options like alpha removal threshold and spherical harmonics degree if needed.
+   - Multiple files can be loaded and managed from the scene list.
+3. **Navigate the scene:**
+   - Use mouse to orbit, pan, and zoom.
+   - Adjust FOV and background color as desired.
+4. **Transform scenes:**
+   - Enable transform mode to move, rotate, or scale the selected scene.
+   - Use the transform mode buttons to switch between operations.
+5. **Make measurements:**
+   - Double-click to place reference points.
+   - Click to start/extend measurements; close a polygon to measure area.
+   - Set scale by clicking a distance label and entering the real-world value.
+   - Use clear buttons to remove points or measurements.
+
+---
+
+## Development
+
+- Main logic is in `index.html` (uses ES modules and import maps)
+- 3D Gaussian Splat loading via `lib/gaussian-splats-3d.module.js`
+- UI styled with Tailwind CSS CDN
+- No build step required; works as a static site
+
+---
+
+## License
+See [LICENSE](LICENSE).
