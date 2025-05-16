@@ -517,6 +517,38 @@
             dragOffset.set(0,0,0);
         });
 
+        // Prevent DragControls from activating on non-left mouse buttons
+        renderer.domElement.addEventListener('pointerdown', function(event) {
+            if (event.button !== 0) { // 0 = left, 1 = middle, 2 = right
+                // If it's not the left button, and dragControls is currently enabled,
+                // disable it to prevent dragging with this button press.
+                if (dragControls && dragControls.enabled) {
+                    dragControls.enabled = false;
+                    // Flag to re-enable on pointerup
+                    renderer.domElement._wasDragControlsDisabledForNonLeftClick = true;
+                }
+            } else {
+                // It is the left button.
+                // If dragControls was disabled by our logic (e.g., a non-left button was pressed and held, then left was pressed),
+                // we should ensure it's enabled for this left click.
+                if (dragControls && !dragControls.enabled && renderer.domElement._wasDragControlsDisabledForNonLeftClick) {
+                     dragControls.enabled = true;
+                     // The flag will be cleared on the eventual pointerup for the non-left button.
+                }
+            }
+        }, true); // Use capture phase
+
+        renderer.domElement.addEventListener('pointerup', function(event) {
+            // If dragControls was disabled by our pointerdown listener for a non-left click,
+            // re-enable it now that the button is up.
+            if (renderer.domElement._wasDragControlsDisabledForNonLeftClick) {
+                if (dragControls) { // Check if dragControls exists
+                    dragControls.enabled = true;
+                }
+                renderer.domElement._wasDragControlsDisabledForNonLeftClick = false;
+            }
+        }, true); // Use capture phase
+
         // --- Measurement Event Listeners ---
         renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement AND gizmo activation
         window.addEventListener('keydown', onKeyDown, false);
