@@ -753,9 +753,9 @@
     clickRaycaster.params.Points.threshold = 0.1; // If needed for points
 
     // --- Double Click Listener (for placing points ONLY) ---
-    renderer.domElement.addEventListener('dblclick', onDoubleClick, false);
+    renderer.domElement.addEventListener('dblclick', onDoubleClickPlacePoint, false); // Renamed
 
-    function onDoubleClick(event) {
+    function onDoubleClickPlacePoint(event) { // Renamed and simplified
         event.preventDefault();
 
         // 1. Check if the click is on the UI panel first.
@@ -765,44 +765,14 @@
             return; // Click is inside the UI panel
         }
 
-        // 2. Check if double-clicking an existing marker (to delete it).
-        // This check is done before checking measurementState for finishing,
-        // to correctly handle deleting a marker when idle, even if the dblclick's
-        // own preceding click events briefly started a measurement.
-        const mouse = new THREE.Vector2(
-            (event.clientX / window.innerWidth) * 2 - 1,
-            -(event.clientY / window.innerHeight) * 2 + 1
-        );
-        clickRaycaster.setFromCamera(mouse, camera);
-        const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
-
-        if (intersectsMarkers.length > 0) {
-            const intersectedObject = intersectsMarkers[0].object;
-            if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
-                const crossToRemove = intersectedObject.parent;
-                markerGroup.remove(crossToRemove);
-                console.log("Reference Point removed by double-click.");
-
-                // If a measurement was active (e.g., started by the first click of this dblclick)
-                if (measurementState === 'measuring') {
-                    resetMeasurementState(); // Cancel it
-                    console.log("Measurement cancelled due to deleting a reference point during dblclick.");
-                }
-                return; // Marker deleted, action complete.
-            }
-        }
-
-        // 3. If measuring (and not UI click, and not marker deletion), finish measurement.
-        // This means a double-click on empty space (or a splat, if not placing new point)
-        // while measuring will finish it.
+        // 2. If measuring, finish measurement.
         if (measurementState === 'measuring') {
             finishMeasurement(false); // Finish as open path
             console.log("Measurement finished by double-click (on non-marker or empty space).");
             return; // Stop further processing
         }
 
-        // 4. If idle & not UI & not marker deletion: Place new point.
-        // (This part is only reached if not measuring, not UI click, and not deleting existing marker)
+        // 3. If idle & not UI: Place new point.
         // --- Raycast against splats to place a NEW point ---
         const internalRaycaster = dropInViewer?.viewer?.raycaster;
         if (!internalRaycaster || !dropInViewer.viewer.splatMesh || dropInViewer.viewer.splatMesh.getSplatCount() === 0) {
@@ -820,9 +790,6 @@
         if (outHits.length > 0) {
             const hitPosition = outHits[0].origin;
             createCrossMarkerAtPosition(hitPosition, camera.position);
-            // Optional: Center controls on new point? Maybe not for double-click.
-            // controls.target.copy(hitPosition);
-            // controls.update();
         } else {
             console.log("No splat hit on double-click (for new point placement).");
         }
@@ -980,11 +947,36 @@
         );
         clickRaycaster.setFromCamera(mouse, camera);
 
-        const intersects = clickRaycaster.intersectObjects(measurementGroup.children, true);
+        // 1. Check for Reference Point (Anchor/Cross Marker) click
+        const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
+        if (intersectsMarkers.length > 0) {
+            const intersectedObject = intersectsMarkers[0].object;
+            if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
+                const crossToRemove = intersectedObject.parent;
+                markerGroup.remove(crossToRemove);
+                console.log("Reference Point removed by right-click.");
 
-        for (const intersect of intersects) {
+                // If a measurement was active, reset it, as one of its points is now gone.
+                if (measurementState === 'measuring') {
+                    // Check if the removed marker was part of the current measurement
+                    const removedMarkerWasInMeasurement = currentMeasurementSequence.some(p => p.marker === crossToRemove);
+                    if (removedMarkerWasInMeasurement) {
+                        console.log("Measurement cancelled because an active reference point was deleted.");
+                        resetMeasurementState();
+                    }
+                }
+                // TODO: Future enhancement - intelligently remove only affected measurement segments
+                // For now, if any point of an active measurement is removed, the whole current measurement is reset.
+                // Also, existing completed measurements that used this point will remain, but the point will be gone.
+                // A more robust solution would be to iterate through all completed measurements and remove/update them.
+                return; // Marker deleted, action complete.
+            }
+        }
+
+        // 2. Check for Measurement Label click (if no marker was clicked)
+        const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true);
+        for (const intersect of intersectsLabels) {
             const clickedObject = intersect.object;
-            // Check if it's a label and has an associated line
             if (clickedObject.userData && clickedObject.userData.isDistanceLabel && clickedObject.userData.associatedLine) {
                 const labelToRemove = clickedObject;
                 const lineToRemove = clickedObject.userData.associatedLine;
