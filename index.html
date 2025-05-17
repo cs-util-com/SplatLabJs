@@ -94,7 +94,7 @@
         <div class="flex flex-col space-y-2"> <!-- Use flex column for layout -->
             <label for="viewFile" class="inline-block" title="Load .ply, .ksplat, .splat, .spz">
                 <span class="text-blue-800 border border-blue-300 bg-blue-100 hover:bg-blue-200 hover:border-blue-500 hover:text-blue-900 py-1 px-3 rounded-md shadow-md cursor-pointer mx-auto block w-full">Add .ply, .ksplat, .splat, .spz</span>
-                <input type="file" id="viewFile" class="hidden" onchange="window.onFileChange(this)"> <!-- Removed fileNameLabelID argument -->
+                <input type="file" id="viewFile" class="hidden" onchange="window.onFileChange(this)" accept=".ply,.ksplat,.splat,.spz"> <!-- Removed fileNameLabelID argument -->
             </label>
             <div class="flex items-center justify-center space-x-3"> <!-- Flex row for inputs -->
                  <div class="flex items-center space-x-1">
@@ -517,8 +517,41 @@
             dragOffset.set(0,0,0);
         });
 
+        // Prevent DragControls from activating on non-left mouse buttons
+        renderer.domElement.addEventListener('pointerdown', function(event) {
+            if (event.button !== 0) { // 0 = left, 1 = middle, 2 = right
+                // If it's not the left button, and dragControls is currently enabled,
+                // disable it to prevent dragging with this button press.
+                if (dragControls && dragControls.enabled) {
+                    dragControls.enabled = false;
+                    // Flag to re-enable on pointerup
+                    renderer.domElement._wasDragControlsDisabledForNonLeftClick = true;
+                }
+            } else {
+                // It is the left button.
+                // If dragControls was disabled by our logic (e.g., a non-left button was pressed and held, then left was pressed),
+                // we should ensure it's enabled for this left click.
+                if (dragControls && !dragControls.enabled && renderer.domElement._wasDragControlsDisabledForNonLeftClick) {
+                     dragControls.enabled = true;
+                     // The flag will be cleared on the eventual pointerup for the non-left button.
+                }
+            }
+        }, true); // Use capture phase
+
+        renderer.domElement.addEventListener('pointerup', function(event) {
+            // If dragControls was disabled by our pointerdown listener for a non-left click,
+            // re-enable it now that the button is up.
+            if (renderer.domElement._wasDragControlsDisabledForNonLeftClick) {
+                if (dragControls) { // Check if dragControls exists
+                    dragControls.enabled = true;
+                }
+                renderer.domElement._wasDragControlsDisabledForNonLeftClick = false;
+            }
+        }, true); // Use capture phase
+
         // --- Measurement Event Listeners ---
         renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement AND gizmo activation
+        renderer.domElement.addEventListener('contextmenu', onRightClick, false); // Added for right-click to delete measurement
         window.addEventListener('keydown', onKeyDown, false);
         document.getElementById('clearPointsButton').addEventListener('click', clearReferencePoints);
         document.getElementById('clearMeasurementsButton').addEventListener('click', clearMeasurements);
@@ -720,39 +753,30 @@
     clickRaycaster.params.Points.threshold = 0.1; // If needed for points
 
     // --- Double Click Listener (for placing points ONLY) ---
-    renderer.domElement.addEventListener('dblclick', onDoubleClick, false);
+    renderer.domElement.addEventListener('dblclick', onDoubleClickPlacePoint, false); // Renamed
 
-    function onDoubleClick(event) {
+    function onDoubleClickPlacePoint(event) { // Renamed and simplified
         event.preventDefault();
-        // Check if the click is on the UI panel.
+
+        // 1. Check if the click is on the UI panel first.
         const containerRect = document.getElementById('container').getBoundingClientRect();
         if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
             event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
             return; // Click is inside the UI panel
         }
 
-        // Check if double-clicking an existing marker (to delete it)
-        const mouse = new THREE.Vector2(
-            (event.clientX / window.innerWidth) * 2 - 1,
-            -(event.clientY / window.innerHeight) * 2 + 1
-        );
-        clickRaycaster.setFromCamera(mouse, camera); // Use clickRaycaster
-        const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
-
-        if (intersectsMarkers.length > 0) {
-            const intersectedObject = intersectsMarkers[0].object;
-            if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
-                const crossToRemove = intersectedObject.parent;
-                markerGroup.remove(crossToRemove);
-                console.log("Reference Point removed by double-click.");
-                return; // Don't proceed to splat raycasting
-            }
+        // 2. If measuring, finish measurement.
+        if (measurementState === 'measuring') {
+            finishMeasurement(false); // Finish as open path
+            console.log("Measurement finished by double-click (on non-marker or empty space).");
+            return; // Stop further processing
         }
 
+        // 3. If idle & not UI: Place new point.
         // --- Raycast against splats to place a NEW point ---
         const internalRaycaster = dropInViewer?.viewer?.raycaster;
         if (!internalRaycaster || !dropInViewer.viewer.splatMesh || dropInViewer.viewer.splatMesh.getSplatCount() === 0) {
-            console.log("No splats loaded or raycaster not ready for placing point.");
+            console.log("No splats loaded or raycaster not ready for placing point on double-click.");
             return;
         }
 
@@ -766,11 +790,8 @@
         if (outHits.length > 0) {
             const hitPosition = outHits[0].origin;
             createCrossMarkerAtPosition(hitPosition, camera.position);
-            // Optional: Center controls on new point? Maybe not for double-click.
-            // controls.target.copy(hitPosition);
-            // controls.update();
         } else {
-            console.log("No splat hit on double-click.");
+            console.log("No splat hit on double-click (for new point placement).");
         }
     }
 
@@ -902,11 +923,122 @@
         deactivateTransformMode(); // Detach gizmo AND deactivate mode
     }
 
+    // --- Right Click Listener (for deleting measurements) ---
+    function onRightClick(event) {
+        event.preventDefault();
+
+        // Ignore if dragging marker or gizmo
+        if (draggedObject || (transformControls && transformControls.dragging)) {
+            console.log("onRightClick ignored: Drag in progress.");
+            return;
+        }
+
+        // Ignore if clicking UI panel
+        const containerRect = document.getElementById('container').getBoundingClientRect();
+        if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
+            event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
+            console.log("onRightClick ignored: UI panel.");
+            return;
+        }
+
+        const mouse = new THREE.Vector2(
+            (event.clientX / window.innerWidth) * 2 - 1,
+            -(event.clientY / window.innerHeight) * 2 + 1
+        );
+        clickRaycaster.setFromCamera(mouse, camera);
+
+        // 1. Check for Reference Point (Anchor/Cross Marker) click
+        const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
+        if (intersectsMarkers.length > 0) {
+            const intersectedObject = intersectsMarkers[0].object;
+            if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
+                const crossToRemove = intersectedObject.parent;
+                markerGroup.remove(crossToRemove);
+                console.log("Reference Point removed by right-click.");
+
+                // If a measurement was active, reset it, as one of its points is now gone.
+                if (measurementState === 'measuring') {
+                    // Check if the removed marker was part of the current measurement
+                    const removedMarkerWasInMeasurement = currentMeasurementSequence.some(p => p.marker === crossToRemove);
+                    if (removedMarkerWasInMeasurement) {
+                        console.log("Measurement cancelled because an active reference point was deleted.");
+                        resetMeasurementState();
+                    }
+                }
+                // TODO: Future enhancement - intelligently remove only affected measurement segments
+                // For now, if any point of an active measurement is removed, the whole current measurement is reset.
+                // Also, existing completed measurements that used this point will remain, but the point will be gone.
+                // A more robust solution would be to iterate through all completed measurements and remove/update them.
+                return; // Marker deleted, action complete.
+            }
+        }
+
+        // 2. Check for Measurement Label click (if no marker was clicked)
+        const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true);
+        for (const intersect of intersectsLabels) {
+            const clickedObject = intersect.object;
+            if (clickedObject.userData && clickedObject.userData.isDistanceLabel && clickedObject.userData.associatedLine) {
+                const labelToRemove = clickedObject;
+                const lineToRemove = clickedObject.userData.associatedLine;
+
+                console.log("Right-clicked on measurement label. Removing measurement segment.");
+
+                // Remove from scene
+                measurementGroup.remove(labelToRemove);
+                measurementGroup.remove(lineToRemove);
+
+                // Dispose of resources
+                if (labelToRemove.material.map && labelToRemove.material.map.dispose) {
+                    labelToRemove.material.map.dispose(); // Dispose canvas texture
+                }
+                if (labelToRemove.material && labelToRemove.material.dispose) {
+                    labelToRemove.material.dispose();
+                }
+                // Sprite geometry is managed by THREE, no explicit disposal needed unless custom
+
+                if (lineToRemove.geometry && lineToRemove.geometry.dispose) {
+                    lineToRemove.geometry.dispose();
+                }
+                if (lineToRemove.material && lineToRemove.material.dispose) {
+                    lineToRemove.material.dispose();
+                }
+
+                // Clear references in currentMeasurementSequence
+                for (const pointData of currentMeasurementSequence) {
+                    if (pointData.distanceLabel === labelToRemove) {
+                        pointData.distanceLabel = undefined;
+                        pointData.segmentLine = undefined;
+                        break; 
+                    }
+                }
+                // Also check if the closing segment's label was clicked (if applicable)
+                // This part depends on how closing segment labels are stored/referenced.
+                // For now, the loop above handles labels stored on endPointData.
+
+                console.log("Measurement segment removed and resources disposed.");
+                return; // Found and handled the label
+            }
+        }
+    }
+
+
     // --- Pointer Move Listener (for preview line) ---
     function onPointerMove(event) {
         // Update NDC
         currentMouseNDC.x = (event.clientX / window.innerWidth) * 2 - 1;
         currentMouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+        // Change cursor to pointer when hovering over a distance label in idle state
+        let cursorStyle = 'crosshair';
+        if (measurementState === 'idle') {
+            clickRaycaster.setFromCamera(currentMouseNDC, camera);
+            const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
+                .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel);
+            if (intersectsLabels.length > 0) {
+                cursorStyle = 'pointer';
+            }
+        }
+        renderer.domElement.style.cursor = cursorStyle;
 
         // Update preview line only if measuring and hovering over a valid marker
         if (measurementState === 'measuring' && currentMeasurementSequence.length > 0) {
@@ -1149,6 +1281,11 @@
             label.userData.segmentEnd = seg.end.clone();
             label.userData.colorIndex = measurementColorIndex;
             measurementGroup.add(label);
+
+            // Link line and label for easy removal
+            line.userData.associatedLabel = label;
+            label.userData.associatedLine = line;
+            line.userData.isSegmentLine = true;
 
             // Associate line and label with the *starting* point of this segment in the sequence
             // Find the sequence entry corresponding to seg.start
