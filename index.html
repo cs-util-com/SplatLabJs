@@ -736,6 +736,15 @@
         crossGroup.userData.originalPosition = position.clone(); // Store initial position if needed later
         markerGroup.add(crossGroup); // Add to the main marker group
 
+        // Set camera target to the new anchor position
+        controls.target.copy(position);
+
+        // Maintain camera distance
+        const offset = new THREE.Vector3().subVectors(camera.position, position);
+        camera.position.copy(position).add(offset);
+        controls.update();
+
+
         console.log(`Reference Point added at: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)} with scale factor ${scaleFactor.toFixed(2)} (dist: ${distance.toFixed(2)})`);
 
         // Dispose of dynamic geometry
