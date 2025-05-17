@@ -551,6 +551,7 @@
 
         // --- Measurement Event Listeners ---
         renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement AND gizmo activation
+        renderer.domElement.addEventListener('contextmenu', onRightClick, false); // Added for right-click to delete measurement
         window.addEventListener('keydown', onKeyDown, false);
         document.getElementById('clearPointsButton').addEventListener('click', clearReferencePoints);
         document.getElementById('clearMeasurementsButton').addEventListener('click', clearMeasurements);
@@ -955,6 +956,80 @@
         deactivateTransformMode(); // Detach gizmo AND deactivate mode
     }
 
+    // --- Right Click Listener (for deleting measurements) ---
+    function onRightClick(event) {
+        event.preventDefault();
+
+        // Ignore if dragging marker or gizmo
+        if (draggedObject || (transformControls && transformControls.dragging)) {
+            console.log("onRightClick ignored: Drag in progress.");
+            return;
+        }
+
+        // Ignore if clicking UI panel
+        const containerRect = document.getElementById('container').getBoundingClientRect();
+        if (event.clientX >= containerRect.left && event.clientX <= containerRect.right &&
+            event.clientY >= containerRect.top && event.clientY <= containerRect.bottom) {
+            console.log("onRightClick ignored: UI panel.");
+            return;
+        }
+
+        const mouse = new THREE.Vector2(
+            (event.clientX / window.innerWidth) * 2 - 1,
+            -(event.clientY / window.innerHeight) * 2 + 1
+        );
+        clickRaycaster.setFromCamera(mouse, camera);
+
+        const intersects = clickRaycaster.intersectObjects(measurementGroup.children, true);
+
+        for (const intersect of intersects) {
+            const clickedObject = intersect.object;
+            // Check if it's a label and has an associated line
+            if (clickedObject.userData && clickedObject.userData.isDistanceLabel && clickedObject.userData.associatedLine) {
+                const labelToRemove = clickedObject;
+                const lineToRemove = clickedObject.userData.associatedLine;
+
+                console.log("Right-clicked on measurement label. Removing measurement segment.");
+
+                // Remove from scene
+                measurementGroup.remove(labelToRemove);
+                measurementGroup.remove(lineToRemove);
+
+                // Dispose of resources
+                if (labelToRemove.material.map && labelToRemove.material.map.dispose) {
+                    labelToRemove.material.map.dispose(); // Dispose canvas texture
+                }
+                if (labelToRemove.material && labelToRemove.material.dispose) {
+                    labelToRemove.material.dispose();
+                }
+                // Sprite geometry is managed by THREE, no explicit disposal needed unless custom
+
+                if (lineToRemove.geometry && lineToRemove.geometry.dispose) {
+                    lineToRemove.geometry.dispose();
+                }
+                if (lineToRemove.material && lineToRemove.material.dispose) {
+                    lineToRemove.material.dispose();
+                }
+
+                // Clear references in currentMeasurementSequence
+                for (const pointData of currentMeasurementSequence) {
+                    if (pointData.distanceLabel === labelToRemove) {
+                        pointData.distanceLabel = undefined;
+                        pointData.segmentLine = undefined;
+                        break; 
+                    }
+                }
+                // Also check if the closing segment's label was clicked (if applicable)
+                // This part depends on how closing segment labels are stored/referenced.
+                // For now, the loop above handles labels stored on endPointData.
+
+                console.log("Measurement segment removed and resources disposed.");
+                return; // Found and handled the label
+            }
+        }
+    }
+
+
     // --- Pointer Move Listener (for preview line) ---
     function onPointerMove(event) {
         // Update NDC
@@ -1214,6 +1289,11 @@
             label.userData.segmentEnd = seg.end.clone();
             label.userData.colorIndex = measurementColorIndex;
             measurementGroup.add(label);
+
+            // Link line and label for easy removal
+            line.userData.associatedLabel = label;
+            label.userData.associatedLine = line;
+            line.userData.isSegmentLine = true;
 
             // Associate line and label with the *starting* point of this segment in the sequence
             // Find the sequence entry corresponding to seg.start
