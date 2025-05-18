@@ -195,6 +195,12 @@
     let transformModeOptionsContainer;
     let setTranslateModeButton, setRotateModeButton, setScaleModeButton;
 
+    // --- Variables for Right Mouse Drag Detection ---
+    let isRightMouseButtonDown = false;
+    let rightMouseDragHappened = false;
+    const rightMouseDragThreshold = 5; // pixels for drag detection
+    let rightMouseDownPosition = { x: 0, y: 0 };
+
     // --- Measurement Variables ---
     let measurementState = 'idle'; // 'idle', 'measuring'
     let currentMeasurementSequence = []; // { point: THREE.Vector3, marker: THREE.Group, segmentLine?: THREE.Line, distanceLabel?: THREE.Sprite, areaLabel?: THREE.Sprite }
@@ -279,8 +285,8 @@
         renderer.setPixelRatio(window.devicePixelRatio);
         container.appendChild(renderer.domElement);
 
-        // Add pointermove listener to track mouse position
-        renderer.domElement.addEventListener('pointermove', onPointerMove, false); // Renamed for clarity
+        // Add pointermove listener to track mouse position AND detect right-drag
+        renderer.domElement.addEventListener('pointermove', onPointerMove, false); // Listener for onPointerMove
 
         // Controls
         controls = new OrbitControls(camera, renderer.domElement);
@@ -533,12 +539,20 @@
 
         // Prevent DragControls from activating on non-left mouse buttons
         renderer.domElement.addEventListener('pointerdown', function(event) {
+            // Right mouse button drag detection setup
+            if (event.button === 2) { // Right mouse button
+                isRightMouseButtonDown = true;
+                rightMouseDragHappened = false; // Reset drag flag on new mousedown
+                rightMouseDownPosition.x = event.clientX;
+                rightMouseDownPosition.y = event.clientY;
+            }
+
+            // Original DragControls logic for non-left mouse buttons
             if (event.button !== 0) { // 0 = left, 1 = middle, 2 = right
                 // If it's not the left button, and dragControls is currently enabled,
                 // disable it to prevent dragging with this button press.
                 if (dragControls && dragControls.enabled) {
                     dragControls.enabled = false;
-                    // Flag to re-enable on pointerup
                     renderer.domElement._wasDragControlsDisabledForNonLeftClick = true;
                 }
             } else {
@@ -553,6 +567,13 @@
         }, true); // Use capture phase
 
         renderer.domElement.addEventListener('pointerup', function(event) {
+            // Right mouse button state update
+            if (event.button === 2) { // Right mouse button
+                isRightMouseButtonDown = false;
+                // rightMouseDragHappened is now set correctly by onPointerMove if a drag occurred.
+                // It will be used by onRightClick (contextmenu event) and reset on the next right mousedown.
+            }
+
             // If dragControls was disabled by our pointerdown listener for a non-left click,
             // re-enable it now that the button is up.
             if (renderer.domElement._wasDragControlsDisabledForNonLeftClick) {
@@ -950,6 +971,14 @@
     function onRightClick(event) {
         event.preventDefault();
 
+        // ADD THIS CHECK AT THE TOP:
+        if (rightMouseDragHappened) {
+            console.log("onRightClick (contextmenu) ignored: Right mouse drag detected.");
+            // No need to reset rightMouseDragHappened here,
+            // it will be reset on the next right 'pointerdown' event.
+            return;
+        }
+
         // Ignore if dragging marker or gizmo
         if (draggedObject || (transformControls && transformControls.dragging)) {
             console.log("onRightClick ignored: Drag in progress.");
@@ -1050,6 +1079,16 @@
         // Update NDC
         currentMouseNDC.x = (event.clientX / window.innerWidth) * 2 - 1;
         currentMouseNDC.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+        // Logic for right mouse drag detection
+        if (isRightMouseButtonDown && !rightMouseDragHappened) { // Check !rightMouseDragHappened to avoid redundant calculations
+            const dx = Math.abs(event.clientX - rightMouseDownPosition.x);
+            const dy = Math.abs(event.clientY - rightMouseDownPosition.y);
+            if (dx > rightMouseDragThreshold || dy > rightMouseDragThreshold) {
+                rightMouseDragHappened = true;
+                // console.log("Right mouse drag detected during pointermove."); // Optional: for debugging
+            }
+        }
 
         // Change cursor to pointer when hovering over a distance label in idle state
         let cursorStyle = 'crosshair';
