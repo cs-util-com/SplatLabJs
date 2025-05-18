@@ -1819,33 +1819,39 @@
     });
 
     function buildPrompt(userText, consoleLog) {
-      const prefix = `I am a user (not a developer) of ${GITHUB_URL} (browse to that url and take a look at the code and readme to learn what this app does).`
-      +`\nYour goal is to to be a support assistant and help me with my question, bug report or feature request.`
-      +`\nBelow you find user information that explains my current intent.`
-      +`\nIn case the provided user information sounds like question on how to do something or how something works use these rules:`
-      +`\nTake as much context as possible (especially from the github repo) to help the user as well as you can.`
-      +`\n\nIn case the provided user information sounds like an bug report or a feature request use these rules:`
-      +`\nYour task is to write a well structured github issue with a focus on the underlying user story.`
-      +`\n\nTo get to the fundamental goal for the issue, review if the provided user information already answers the "5 Whys" and if not ask me one question at a time until you have all information needed for the issue.`
-      +`\n\nProvide the full text for the issue in raw markdown notation (for copy paste) and since you reviewed the code, feel free to also include a section with an implementation suggestion, if applicable.`
-      +`\n\nHere is the provided user information:\n`;
+        const githubUrlParts = GITHUB_URL.split('/');
+        const repoOwner = githubUrlParts[githubUrlParts.length - 2];
+        const repoName = githubUrlParts[githubUrlParts.length - 1];
 
-      let prompt = `${prefix}${userText}\n\nConsole log:\n${consoleLog}`;
+        const prefix = `I am a user (not a developer) of ${GITHUB_URL} `
+        +`\nBrowse to that url and take a look at the code and readme to learn what this app does).`
+        +`\nEspecially look at the readme at https://raw.githubusercontent.com/${repoOwner}/${repoName}/main/readme.md and also at the source in https://raw.githubusercontent.com/${repoOwner}/${repoName}/main/index.html.`
+        +`\nYour goal is to to be a support assistant and help me with my question, bug report or feature request.`
+        +`\nBelow you find user information that explains my current intent.`
+        +`\nIn case the provided user information sounds like question on how to do something or how something works use these rules:`
+        +`\nTake as much context as possible (especially from the github repo) to help the user as well as you can.`
+        +`\n\nIn case the provided user information sounds like an bug report or a feature request use these rules:`
+        +`\nYour task is to write a well structured github issue with a focus on the underlying user story.`
+        +`\n\nTo get to the fundamental goal for the issue, review if the provided user information already answers the "5 Whys" and if not ask me one question at a time until you have all information needed for the issue.`
+        +`\n\nProvide the full text for the issue in raw markdown notation (for copy paste) and since you reviewed the code, feel free to also include a section with an implementation suggestion, if applicable.`
+        +`\n\nHere is the provided user information:\n`;
 
-      // Encoding length helper
-      const encodedLength = str => encodeURIComponent(str).length;
+        let prompt = `${prefix}${userText}\n\nConsole log:\n${consoleLog}`;
 
-      // Trim console log until total ≤ limit
-      if (encodedLength(prompt) > CHAR_LIMIT) {
-        let trimmedLog = consoleLog;
-        while (encodedLength(prompt) > CHAR_LIMIT && trimmedLog.length > 0) {
-          // drop first 200 characters at a time
-          trimmedLog = trimmedLog.slice(200);
-          prompt = `${prefix}${userText}\n\nConsole log:\n${trimmedLog}...`;
+        // Encoding length helper
+        const encodedLength = str => encodeURIComponent(str).length;
+
+        // Trim console log until total ≤ limit
+        if (encodedLength(prompt) > CHAR_LIMIT) {
+            let trimmedLog = consoleLog;
+            while (encodedLength(prompt) > CHAR_LIMIT && trimmedLog.length > 0) {
+            // drop first 200 characters at a time
+            trimmedLog = trimmedLog.slice(200);
+            prompt = `${prefix}${userText}\n\nConsole log:\n${trimmedLog}...`;
+            }
         }
-      }
 
-      return prompt;
+        return prompt;
     }
 
     function sendToChatGPT() {
