@@ -200,6 +200,16 @@
     let rightMouseDragHappened = false;
     const rightMouseDragThreshold = 5; // pixels for drag detection
     let rightMouseDownPosition = { x: 0, y: 0 };
+    
+    // --- Raycaster Setup ---
+    const outHits = [];
+    const renderDimensions = new THREE.Vector2();
+    const clickRaycaster = new THREE.Raycaster(); // Use a separate raycaster for clicks to avoid conflicts
+    clickRaycaster.params.Line = clickRaycaster.params.Line || {}; // Ensure params.Line exists
+    clickRaycaster.params.Line.threshold = 0.1; // Adjust threshold for clicking lines
+    clickRaycaster.params.Points = clickRaycaster.params.Points || {}; // Ensure params.Points exists
+    clickRaycaster.params.Points.threshold = 0.1; // If needed for points
+    // Initialize raycaster for drag operations
 
     // --- Measurement Variables ---
     let measurementState = 'idle'; // 'idle', 'measuring'
@@ -304,10 +314,8 @@
         const gridHelper = new THREE.GridHelper( size, divisions );
         scene.add( gridHelper );
 
-        // Initialize SplatMesh - we'll load actual splat data when files are selected
-        // Create empty SplatMesh that will be populated later
-        splatMesh = new SplatMesh();
-        scene.add(splatMesh); // Add to the scene
+        // SplatMesh will be created when a file is loaded - no initialization needed here
+        splatMesh = null;
 
         // --- Marker Group Initialization (Moved Earlier) ---
         // Create a group to hold all marker spheres
@@ -657,29 +665,32 @@
         // Remove the current SplatMesh if it exists
         if (splatMesh) {
           scene.remove(splatMesh);
+          splatMesh = null;
         }
         
-        // Create a new SplatMesh with the file
-        splatMesh = new SplatMesh({
-          url: fileURL,
-          // Apply alpha threshold if library supports it
-          // Note: As of 0.1.3, Spark doesn't have a direct alpha threshold option
-          // but we'll keep the code structure for future compatibility
-          alphaThreshold: alphaRemovalThreshold / 255,
-          // Spherical harmonics are handled automatically by the library
-        });
-        
-        // Add to the scene
-        scene.add(splatMesh);
-        
-        console.log("SplatMesh created and added to scene");
-        
-        // Apply rotation if needed
-        if (rotateSplat) {
-          console.log("Applying 180-degree X rotation to splat mesh...");
-          // Apply quaternion rotation for X-axis 180 degrees
-          splatMesh.quaternion.set(1, 0, 0, 0); // This is equivalent to 180 degrees around X axis
-          console.log("Rotation applied to mesh.");
+        try {
+          // Create a new SplatMesh instance - this matches the Spark example approach
+          splatMesh = new SplatMesh({
+            url: fileURL,
+            alphaThreshold: alphaRemovalThreshold / 255
+          });
+          
+          // Position mesh before adding to scene
+          splatMesh.position.set(0, 0, -3);
+          
+          // Apply rotation if needed 
+          if (rotateSplat) {
+            console.log("Applying 180-degree X rotation to splat mesh...");
+            splatMesh.rotation.x = Math.PI;
+            console.log("Rotation applied to mesh.");
+          }
+          
+          // Add to scene
+          scene.add(splatMesh);
+          
+          console.log("SplatMesh created and added to scene");
+        } catch (error) {
+          console.error("Error creating SplatMesh:", error);
         }
         
         // Detach gizmo and deactivate mode after loading new splat data
@@ -767,12 +778,7 @@
         // Note: DragControls automatically updates its list when children are added to markerGroup
     }
 
-    // --- Raycaster Setup and Event Handling ---
-    const outHits = [];
-    const renderDimensions = new THREE.Vector2();
-    const clickRaycaster = new THREE.Raycaster(); // Use a separate raycaster for clicks to avoid conflicts
-    clickRaycaster.params.Line.threshold = 0.1; // Adjust threshold for clicking lines
-    clickRaycaster.params.Points.threshold = 0.1; // If needed for points
+    // --- Double Click Listener (for placing points ONLY) ---
 
     // --- Double Click Listener (for placing points ONLY) ---
     renderer.domElement.addEventListener('dblclick', onDoubleClickPlacePoint, false); // Renamed
@@ -796,25 +802,31 @@
 
         // 3. If idle & not UI: Place new point.
         // --- Raycast against splats to place a NEW point ---
-        if (!splatMesh || !splatMesh.visible) {
-            console.log("No splats loaded or visible for placing point on double-click.");
+        if (!splatMesh) {
+            console.log("No splats loaded for placing point on double-click.");
+            return;
+        }
+        
+        // Make sure the splat mesh is ready for raycasting
+        if (!splatMesh.visible) {
+            console.log("Splat mesh not ready or visible for placing point on double-click.");
             return;
         }
 
-        // Use standard THREE.js raycasting with the new SplatMesh
+        // Use standard THREE.js raycasting with the new SplatMesh - following the example
         const rect = renderer.domElement.getBoundingClientRect();
-        const mouse = new THREE.Vector2(
-            ((event.clientX - rect.left) / rect.width) * 2 - 1,
-            -((event.clientY - rect.top) / rect.height) * 2 + 1
+        const clickCoords = new THREE.Vector2(
+            (event.clientX / rect.width) * 2 - 1,
+            -(event.clientY / rect.height) * 2 + 1
         );
         
-        clickRaycaster.setFromCamera(mouse, camera);
+        clickRaycaster.setFromCamera(clickCoords, camera);
         
-        // Raycast against the SplatMesh
-        const intersects = clickRaycaster.intersectObject(splatMesh);
+        // Raycast against only the splatMesh for better accuracy
+        const hits = clickRaycaster.intersectObject(splatMesh);
         
-        if (intersects.length > 0) {
-            const hitPosition = intersects[0].point;
+        if (hits.length > 0) {
+            const hitPosition = hits[0].point;
             createCrossMarkerAtPosition(hitPosition, camera.position);
         } else {
             console.log("No splat hit on double-click (for new point placement).");
@@ -902,8 +914,14 @@
             );
             
             clickRaycaster.setFromCamera(mouse, camera);
-            const intersects = clickRaycaster.intersectObject(splatMesh);
-            splatHit = intersects.length > 0;
+            try {
+                // Direct intersect with splatMesh
+                const intersects = clickRaycaster.intersectObject(splatMesh);
+                splatHit = intersects.length > 0;
+            } catch (e) {
+                console.warn("Error raycasting against splatMesh:", e);
+                splatHit = false;
+            }
         }
         console.log(`onClick: Splat hit? ${splatHit}`);
 
@@ -1070,41 +1088,55 @@
                 // console.log("Right mouse drag detected during pointermove."); // Optional: for debugging
             }
         }
+        
+        // Ensure clickRaycaster and required objects are initialized
+        if (!clickRaycaster || !camera || !renderer || !renderer.domElement) {
+            return;
+        }
 
         // Change cursor to pointer when hovering over a distance label in idle state
         let cursorStyle = 'crosshair';
-        if (measurementState === 'idle') {
-            clickRaycaster.setFromCamera(currentMouseNDC, camera);
-            const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
-                .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel);
-            if (intersectsLabels.length > 0) {
-                cursorStyle = 'pointer';
+        if (measurementState === 'idle' && measurementGroup) {
+            try {
+                clickRaycaster.setFromCamera(currentMouseNDC, camera);
+                const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
+                    .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel);
+                if (intersectsLabels.length > 0) {
+                    cursorStyle = 'pointer';
+                }
+            } catch (e) {
+                console.warn("Error checking for label intersections:", e);
             }
         }
         renderer.domElement.style.cursor = cursorStyle;
 
         // Update preview line only if measuring and hovering over a valid marker
-        if (measurementState === 'measuring' && currentMeasurementSequence.length > 0) {
-            clickRaycaster.setFromCamera(currentMouseNDC, camera);
-            const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
+        if (measurementState === 'measuring' && currentMeasurementSequence.length > 0 && markerGroup) {
+            try {
+                clickRaycaster.setFromCamera(currentMouseNDC, camera);
+                const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
 
-            let hoveredMarker = null;
-            if (intersectsMarkers.length > 0) {
-                // Find the parent group which is the actual marker
-                let obj = intersectsMarkers[0].object;
-                while (obj && !obj.userData.isReferencePoint) {
-                    obj = obj.parent;
+                let hoveredMarker = null;
+                if (intersectsMarkers.length > 0) {
+                    // Find the parent group which is the actual marker
+                    let obj = intersectsMarkers[0].object;
+                    while (obj && !obj.userData.isReferencePoint) {
+                        obj = obj.parent;
+                    }
+                    // Check if it's a valid marker and not the last one added
+                    if (obj && obj.userData.isReferencePoint && obj !== currentMeasurementSequence[currentMeasurementSequence.length - 1].marker) {
+                        hoveredMarker = obj;
+                    }
                 }
-                // Check if it's a valid marker and not the last one added
-                if (obj && obj.userData.isReferencePoint && obj !== currentMeasurementSequence[currentMeasurementSequence.length - 1].marker) {
-                    hoveredMarker = obj;
-                }
-            }
 
-            if (hoveredMarker) {
-                updatePreviewLine(hoveredMarker.position); // Pass target position
-            } else {
-                updatePreviewLine(null); // Hide preview line
+                if (hoveredMarker) {
+                    updatePreviewLine(hoveredMarker.position); // Pass target position
+                } else {
+                    updatePreviewLine(null); // Hide preview line
+                }
+            } catch (e) {
+                console.warn("Error in raycasting for measurement preview:", e);
+                updatePreviewLine(null); // Ensure preview is hidden on error
             }
         } else {
              updatePreviewLine(null); // Ensure preview is hidden if not measuring
