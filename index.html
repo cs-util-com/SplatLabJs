@@ -127,7 +127,7 @@
             </div>
             <!-- Add Rotation Checkbox -->
             <div class="flex items-center justify-center space-x-1 mt-1">
-                <input type="checkbox" id="rotateSplatCheckbox" class="form-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" checked>
+                <input type="checkbox" id="rotateSplatCheckbox" class="form-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
                 <label for="rotateSplatCheckbox" class="ml-2 text-sm text-gray-600">Rotate 180° (X-axis)</label>
             </div>
             <!-- Add Camera FOV Control -->
@@ -300,7 +300,7 @@
 
         // Controls
         controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true; // Optional damping effect
+        controls.enableDamping = false; // Optional damping effect
         controls.target.set(0, 0, 0); // Set initial lookAt
         controls.update();
 
