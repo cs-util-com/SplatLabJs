@@ -306,13 +306,13 @@
 
         // Axes Helper
         const axesHelper = new THREE.AxesHelper( 5 ); // Length of 5 units
-        THREE.Object3D.prototype.add.call(scene, axesHelper); // FIX: Bypass buggy Scene.add override from Spark library
+        scene.add(axesHelper);
 
         // Grid Helper
         const size = 10; // Size of the grid (e.g., 10x10 units)
         const divisions = 10; // Number of divisions within the grid
         const gridHelper = new THREE.GridHelper( size, divisions );
-        THREE.Object3D.prototype.add.call(scene, gridHelper); // FIX: Bypass buggy Scene.add override
+        scene.add(gridHelper);
 
         // SplatMesh will be created when a file is loaded - no initialization needed here
         splatMesh = null;
@@ -320,11 +320,11 @@
         // --- Marker Group Initialization (Moved Earlier) ---
         // Create a group to hold all marker spheres
         markerGroup = new THREE.Group(); // Assign to the outer scope variable
-        THREE.Object3D.prototype.add.call(scene, markerGroup); // FIX: Bypass buggy Scene.add override
+        scene.add(markerGroup);
 
         // --- Measurement Group Initialization ---
         measurementGroup = new THREE.Group();
-        THREE.Object3D.prototype.add.call(scene, measurementGroup); // FIX: Bypass buggy Scene.add override
+        scene.add(measurementGroup);
 
         // --- Transform Controls Initialization ---
         transformControls = new TransformControls(camera, renderer.domElement);
@@ -673,19 +673,16 @@
             url: fileURL,
             alphaThreshold: alphaRemovalThreshold / 255
           });
-          
-          // Position mesh before adding to scene
-          splatMesh.position.set(0, 0, -3);
-          
+                   
           // Apply rotation if needed 
           if (rotateSplat) {
             console.log("Applying 180-degree X rotation to splat mesh...");
-            splatMesh.rotation.x = Math.PI;
+            splatMesh.rotation.x += Math.PI; // Rotate 180 degrees around X-axis
             console.log("Rotation applied to mesh.");
           }
           
-          // Add to scene - THIS CALL MUST USE scene.add() to trigger the library's logic
-          scene.add(splatMesh);
+        // Add the new splat mesh to the scene
+        scene.add(splatMesh);
           
           console.log("SplatMesh created and added to scene");
         } catch (error) {
