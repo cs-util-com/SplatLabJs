@@ -306,13 +306,13 @@
 
         // Axes Helper
         const axesHelper = new THREE.AxesHelper( 5 ); // Length of 5 units
-        scene.add( axesHelper );
+        THREE.Object3D.prototype.add.call(scene, axesHelper); // FIX: Bypass buggy Scene.add override from Spark library
 
         // Grid Helper
         const size = 10; // Size of the grid (e.g., 10x10 units)
         const divisions = 10; // Number of divisions within the grid
         const gridHelper = new THREE.GridHelper( size, divisions );
-        scene.add( gridHelper );
+        THREE.Object3D.prototype.add.call(scene, gridHelper); // FIX: Bypass buggy Scene.add override
 
         // SplatMesh will be created when a file is loaded - no initialization needed here
         splatMesh = null;
@@ -320,11 +320,11 @@
         // --- Marker Group Initialization (Moved Earlier) ---
         // Create a group to hold all marker spheres
         markerGroup = new THREE.Group(); // Assign to the outer scope variable
-        scene.add(markerGroup); // Add the group to the scene
+        THREE.Object3D.prototype.add.call(scene, markerGroup); // FIX: Bypass buggy Scene.add override
 
         // --- Measurement Group Initialization ---
         measurementGroup = new THREE.Group();
-        scene.add(measurementGroup);
+        THREE.Object3D.prototype.add.call(scene, measurementGroup); // FIX: Bypass buggy Scene.add override
 
         // --- Transform Controls Initialization ---
         transformControls = new TransformControls(camera, renderer.domElement);
@@ -333,7 +333,7 @@
         });
         transformControls.visible = false; // Initially hidden
         transformControls.enabled = false; // Initially disabled
-        scene.add(transformControls);
+        THREE.Object3D.prototype.add.call(scene, transformControls); // FIX: Bypass buggy Scene.add override
 
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
@@ -685,7 +685,7 @@
             console.log("Rotation applied to mesh.");
           }
           
-          // Add to scene
+          // Add to scene - THIS CALL MUST USE scene.add() to trigger the library's logic
           scene.add(splatMesh);
           
           console.log("SplatMesh created and added to scene");
