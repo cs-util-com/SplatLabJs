@@ -81,7 +81,7 @@
         "imports": {
             "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.174.0/three.module.js",
             "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.174.0/examples/jsm/",
-            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/0.1.3/spark.module.js"
+            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/0.1.4/spark.module.js"
         }
     }
   </script>
@@ -333,7 +333,6 @@
         });
         transformControls.visible = false; // Initially hidden
         transformControls.enabled = false; // Initially disabled
-        THREE.Object3D.prototype.add.call(scene, transformControls); // FIX: Bypass buggy Scene.add override
 
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
