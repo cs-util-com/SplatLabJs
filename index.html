@@ -141,10 +141,11 @@
                 <label for="bgColorPicker" class="text-sm text-gray-600 whitespace-nowrap">BG:</label>
                 <input type="color" id="bgColorPicker" value="#000000" class="h-6 w-full border border-gray-400 rounded cursor-pointer mx-2">
             </div>
-            <!-- Measurement Controls -->
+            <!-- Action Controls -->
             <div class="border-t pt-2 mt-2 border-gray-300 flex justify-center space-x-2">
                  <button id="clearPointsButton" class="text-xs bg-red-100 hover:bg-red-200 text-red-800 border border-red-300 hover:border-red-500 py-1 px-2 rounded shadow-sm">Clear Points</button>
                  <button id="clearMeasurementsButton" class="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-800 border border-yellow-300 hover:border-yellow-500 py-1 px-2 rounded shadow-sm">Clear Measures</button>
+                 <button id="clearAllButton" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-800 border border-gray-400 py-1 px-2 rounded shadow-sm">Clear All</button>
             </div>
             <!-- Transform Mode Toggle Button -->
             <div class="border-t pt-2 mt-2 border-gray-300 flex justify-center">
@@ -333,6 +334,7 @@
         });
         transformControls.visible = false; // Initially hidden
         transformControls.enabled = false; // Initially disabled
+        // scene.add(transformControls); // BUG FIX: DO NOT add transformControls to the scene directly.
 
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
@@ -588,12 +590,14 @@
             }
         }, true); // Use capture phase
 
-        // --- Measurement Event Listeners ---
+        // --- UI and Measurement Event Listeners ---
         renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement AND gizmo activation
         renderer.domElement.addEventListener('contextmenu', onRightClick, false); // Added for right-click to delete measurement
         window.addEventListener('keydown', onKeyDown, false);
-        document.getElementById('clearPointsButton').addEventListener('click', clearReferencePoints);
-        document.getElementById('clearMeasurementsButton').addEventListener('click', clearMeasurements);
+        document.getElementById('clearPointsButton').addEventListener('click', () => clearReferencePoints(true));
+        document.getElementById('clearMeasurementsButton').addEventListener('click', () => clearMeasurements(true));
+        document.getElementById('clearAllButton').addEventListener('click', clearAll);
+
 
         // Handle window resize
         window.addEventListener('resize', onWindowResize, false);
@@ -680,19 +684,20 @@
           splatMeshes.push(newSplatMesh);
           
           console.log("SplatMesh created and added to scene");
+
+          // IMPROVEMENT: Add an event listener to the new mesh. Once it's ready, we can revoke the URL.
+          // This is more robust than a fixed timeout.
+          newSplatMesh.addEventListener('ready', () => {
+              console.log(`Splat mesh from ${fileURL} is ready. Revoking object URL.`);
+              URL.revokeObjectURL(fileURL);
+          });
+
         } catch (error) {
           console.error("Error creating SplatMesh:", error);
         }
         
         // Detach gizmo and deactivate mode after loading new splat data
         deactivateTransformMode(); // Use helper function
-        
-        // Make sure to revoke the URL when done to free memory
-        // However, we need to keep it valid while loading - so we can't revoke immediately
-        // The library should handle this internally, but just to be safe:
-        setTimeout(() => {
-          URL.revokeObjectURL(fileURL);
-        }, 5000); // Give it some time to load before revoking
         
       } catch (e) {
         console.error("Could not load scene: " + e.message);
@@ -993,8 +998,12 @@
             const intersectedObject = intersectsMarkers[0].object;
             if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
                 const crossToRemove = intersectedObject.parent;
+                const removedPosition = crossToRemove.position.clone(); // Get position before removing from scene
                 markerGroup.remove(crossToRemove);
                 console.log("Reference Point removed by right-click.");
+
+                // IMPROVEMENT: Clean up associated measurements
+                cleanupMeasurementsForPosition(removedPosition);
 
                 // If a measurement was active, reset it, as one of its points is now gone.
                 if (measurementState === 'measuring') {
@@ -1005,10 +1014,6 @@
                         resetMeasurementState();
                     }
                 }
-                // TODO: Future enhancement - intelligently remove only affected measurement segments
-                // For now, if any point of an active measurement is removed, the whole current measurement is reset.
-                // Also, existing completed measurements that used this point will remain, but the point will be gone.
-                // A more robust solution would be to iterate through all completed measurements and remove/update them.
                 return; // Marker deleted, action complete.
             }
         }
@@ -1407,6 +1412,7 @@
                 centroid.divideScalar(currentMeasurementSequence.length);
                 areaLabel.position.copy(centroid);
                 areaLabel.userData.isAreaLabel = true;
+                areaLabel.userData.polygonPoints = currentMeasurementSequence.map(p => p.point.clone()); // Store points for rescaling
                 areaLabel.userData.colorIndex = measurementColorIndex;
                 measurementGroup.add(areaLabel);
                 // Store area label reference (e.g., with the first point)
@@ -1680,48 +1686,91 @@
     }
 
     function updateAllMeasurementLabels() {
-        measurementGroup.children.forEach(child => {
+        // Create a temporary array of children to iterate over to avoid issues with modification during loop
+        const childrenToUpdate = [...measurementGroup.children];
+
+        childrenToUpdate.forEach(child => {
+            // Guard against child being removed from another operation in the same loop
+            if (!child.parent) return;
+
             if (child.userData.isDistanceLabel && child.userData.segmentStart && child.userData.segmentEnd) {
                 const originalDistance = child.userData.segmentStart.distanceTo(child.userData.segmentEnd);
                 const scaledDistance = originalDistance * scaleFactor;
                 const newText = scaledDistance.toFixed(2);
-                // Recreate label with new text (simplest way to update canvas texture)
-                const color = child.material.map.image.getContext('2d').fillStyle; // Attempt to get color (might be tricky)
-                const colorIndex = child.userData.colorIndex ?? 0; // Fallback color index
+                
+                const colorIndex = child.userData.colorIndex ?? 0;
                 const newLabel = createDistanceLabel(newText, measurementColors[colorIndex]);
                 newLabel.position.copy(child.position);
                 newLabel.userData = { ...child.userData }; // Copy user data
-                newLabel.userData.text = newText; // Update text in user data
+                newLabel.userData.text = newText;
+
+                // Also update the associated line's data if needed (not strictly necessary but good practice)
+                if (newLabel.userData.associatedLine) {
+                    newLabel.userData.associatedLine.userData.associatedLabel = newLabel;
+                }
 
                 measurementGroup.remove(child);
                 disposeLabel(child);
                 measurementGroup.add(newLabel);
 
-            } else if (child.userData.isAreaLabel) {
-                // Find the corresponding sequence to recalculate area
-                // This requires better linking between area labels and sequences, difficult without storing sequence data on label
-                // Simple approach: Remove and let user recalculate area if scale changes significantly
-                 console.warn("Area label update after scaling not fully implemented. Please clear and remeasure area if needed.");
-                 // measurementGroup.remove(child);
-                 // disposeLabel(child);
+            } else if (child.userData.isAreaLabel && child.userData.polygonPoints) {
+                // IMPROVEMENT: Area label found, recalculate area
+                const points = child.userData.polygonPoints;
+                const points2D = projectPointsToPlane(points);
+                const newArea = calculatePolygonArea(points2D) * (scaleFactor * scaleFactor);
+                const newText = `Area: ${newArea.toFixed(2)}`;
+
+                const colorIndex = child.userData.colorIndex ?? 0;
+                const newLabel = createDistanceLabel(newText, measurementColors[colorIndex], 14);
+                newLabel.position.copy(child.position);
+                newLabel.userData = { ...child.userData }; // Copy user data
+                newLabel.userData.text = newText;
+
+                measurementGroup.remove(child);
+                disposeLabel(child);
+                measurementGroup.add(newLabel);
             }
         });
     }
 
-    function clearReferencePoints() {
-        if (confirm("Are you sure you want to clear ALL reference points? This cannot be undone.")) {
-            // Remove markers from the group and scene
-            while (markerGroup.children.length > 0) {
-                const marker = markerGroup.children[0];
-                // DragControls might hold references, dispose might be needed if issues arise
-                markerGroup.remove(marker);
-                // Dispose geometry/material if they were unique per marker (not the case here)
+    function clearAll() {
+        if (!confirm("Are you sure you want to clear all splats, points, and measurements? This cannot be undone.")) return;
+
+        // 1. Clear Splats
+        while (splatMeshes.length > 0) {
+            const splat = splatMeshes.pop();
+            scene.remove(splat);
+            // The splat mesh should have a dispose method if the library is well-written
+            if (splat.dispose) {
+                splat.dispose();
             }
-            console.log("All reference points cleared.");
-            // Deactivate transform mode and detach gizmo
-            deactivateTransformMode(); // Use helper function (already hides options)
         }
-        // No need for the extra detachGizmo call outside the confirmation block
+        console.log("All splat meshes cleared.");
+
+        // 2. Clear points and measurements (use existing functions without confirmation)
+        clearReferencePoints(false); 
+        clearMeasurements(false); 
+
+        // 3. Ensure gizmo is detached (already handled by clear functions which call deactivateTransformMode)
+    }
+
+    function clearReferencePoints(askConfirmation = true) {
+        let confirmed = !askConfirmation;
+        if (askConfirmation) {
+            confirmed = confirm("Are you sure you want to clear ALL reference points? This will also remove connected measurements.");
+        }
+
+        if (confirmed) {
+            // Create a copy of children to iterate over, as the group will be modified.
+            [...markerGroup.children].forEach(marker => {
+                const removedPosition = marker.position.clone();
+                markerGroup.remove(marker);
+                cleanupMeasurementsForPosition(removedPosition); // Clean up associated measurements
+            });
+
+            console.log("All reference points and connected measurements cleared.");
+            deactivateTransformMode();
+        }
     }
 
     function clearMeasurements(askConfirmation = true) {
@@ -1751,20 +1800,47 @@
 
             resetMeasurementState(); // Ensure state is idle
             console.log("All measurements cleared.");
-            // Deactivate transform mode and detach gizmo
-            deactivateTransformMode(); // Use helper function (already hides options)
+            deactivateTransformMode();
         }
-         // No need for the extra detachGizmo call outside the confirmation block
     }
 
-    // Helper to clean up measurements if a point is deleted (basic version)
-    function cleanupMeasurementsForPoint(deletedMarker) {
-         // This function is no longer called when double-clicking a marker.
-         // It might still be relevant if the "Clear Reference Points" button behavior needs adjustment,
-         // but currently, that button also calls clearMeasurements directly.
-         console.warn("Reference point deleted. Measurements are NOT automatically cleared.");
-         // clearMeasurements(false); // Keep this commented out or remove if cleanup is never desired
+    // IMPROVEMENT: Helper to clean up measurements if a point is deleted
+    function cleanupMeasurementsForPosition(position) {
+        const linesToRemove = [];
+        const labelsToRemove = new Set(); // Use a Set to avoid duplicates
+
+        measurementGroup.children.forEach(child => {
+            if (child.userData.isMeasurementLine && child.geometry) {
+                const pos = child.geometry.attributes.position;
+                if (!pos || pos.count < 2) return;
+
+                const p1 = new THREE.Vector3().fromBufferAttribute(pos, 0);
+                const p2 = new THREE.Vector3().fromBufferAttribute(pos, 1);
+                
+                // Use a small epsilon for floating point comparison
+                if (p1.distanceToSquared(position) < 1e-6 || p2.distanceToSquared(position) < 1e-6) {
+                    linesToRemove.push(child);
+                    if (child.userData.associatedLabel) {
+                        labelsToRemove.add(child.userData.associatedLabel);
+                    }
+                }
+            }
+        });
+
+        if (linesToRemove.length > 0) {
+            console.log(`Removing ${linesToRemove.length} measurement segment(s) connected to deleted point.`);
+            linesToRemove.forEach(line => {
+                measurementGroup.remove(line);
+                line.geometry.dispose();
+                line.material.dispose();
+            });
+            labelsToRemove.forEach(label => {
+                measurementGroup.remove(label);
+                disposeLabel(label);
+            });
+        }
     }
+
 
     // --- Click-to-Spawn Reference Point Feature ---
     // The redundant code has been removed (duplicate createCrossMarkerAtPosition function and other duplicated code)
