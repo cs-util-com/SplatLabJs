@@ -170,7 +170,8 @@
     import { DragControls } from 'three/addons/controls/DragControls.js';
     import { TransformControls } from 'three/addons/controls/TransformControls.js'; // Import TransformControls
 
-    let scene, camera, renderer, controls, splatMesh;
+    let scene, camera, renderer, controls;
+    const splatMeshes = []; // An array to hold all splat meshes
     // Add references for FOV controls
     let fovSlider, fovValueDisplay;
     // Add reference for background color picker
@@ -315,7 +316,6 @@
         scene.add(gridHelper);
 
         // SplatMesh will be created when a file is loaded - no initialization needed here
-        splatMesh = null;
 
         // --- Marker Group Initialization (Moved Earlier) ---
         // Create a group to hold all marker spheres
@@ -661,15 +661,9 @@
         const fileURL = URL.createObjectURL(viewFile.files[0]);
         console.log(`Loading splat from URL: ${fileURL}`);
         
-        // Remove the current SplatMesh if it exists
-        if (splatMesh) {
-          scene.remove(splatMesh);
-          splatMesh = null;
-        }
-        
         try {
           // Create a new SplatMesh instance - this matches the Spark example approach
-          splatMesh = new SplatMesh({
+          const newSplatMesh = new SplatMesh({
             url: fileURL,
             alphaThreshold: alphaRemovalThreshold / 255
           });
@@ -677,12 +671,13 @@
           // Apply rotation if needed 
           if (rotateSplat) {
             console.log("Applying 180-degree X rotation to splat mesh...");
-            splatMesh.rotation.x += Math.PI; // Rotate 180 degrees around X-axis
+            newSplatMesh.rotation.x += Math.PI; // Rotate 180 degrees around X-axis
             console.log("Rotation applied to mesh.");
           }
           
-        // Add the new splat mesh to the scene
-        scene.add(splatMesh);
+          // Add the new splat mesh to the scene and our array
+          scene.add(newSplatMesh);
+          splatMeshes.push(newSplatMesh);
           
           console.log("SplatMesh created and added to scene");
         } catch (error) {
@@ -798,14 +793,8 @@
 
         // 3. If idle & not UI: Place new point.
         // --- Raycast against splats to place a NEW point ---
-        if (!splatMesh) {
+        if (splatMeshes.length === 0) {
             console.log("No splats loaded for placing point on double-click.");
-            return;
-        }
-        
-        // Make sure the splat mesh is ready for raycasting
-        if (!splatMesh.visible) {
-            console.log("Splat mesh not ready or visible for placing point on double-click.");
             return;
         }
 
@@ -818,8 +807,8 @@
         
         clickRaycaster.setFromCamera(clickCoords, camera);
         
-        // Raycast against only the splatMesh for better accuracy
-        const hits = clickRaycaster.intersectObject(splatMesh);
+        // Raycast against all loaded splat meshes
+        const hits = clickRaycaster.intersectObjects(splatMeshes);
         
         if (hits.length > 0) {
             const hitPosition = hits[0].point;
@@ -902,7 +891,8 @@
 
         // 5. Check Splat Click (Gizmo Activation / Measurement Cancel)
         let splatHit = false;
-        if (splatMesh && splatMesh.visible) {
+        let hitSplatObject = null; // To store the specific splat that was hit
+        if (splatMeshes.length > 0) {
             const rect = renderer.domElement.getBoundingClientRect();
             const mouse = new THREE.Vector2(
                 ((event.clientX - rect.left) / rect.width) * 2 - 1,
@@ -911,11 +901,14 @@
             
             clickRaycaster.setFromCamera(mouse, camera);
             try {
-                // Direct intersect with splatMesh
-                const intersects = clickRaycaster.intersectObject(splatMesh);
-                splatHit = intersects.length > 0;
+                // Intersect with all splat meshes in the scene
+                const intersects = clickRaycaster.intersectObjects(splatMeshes);
+                if (intersects.length > 0) {
+                    splatHit = true;
+                    hitSplatObject = intersects[0].object; // Get the specific splat mesh that was hit
+                }
             } catch (e) {
-                console.warn("Error raycasting against splatMesh:", e);
+                console.warn("Error raycasting against splat meshes:", e);
                 splatHit = false;
             }
         }
@@ -931,10 +924,10 @@
 
             // Only attach gizmo if transform mode is active
             if (transformModeActive) {
-                const shouldAttach = transformControls.object !== splatMesh;
+                const shouldAttach = transformControls.object !== hitSplatObject;
                 console.log(`onClick: Should attach gizmo (Transform Mode Active)? ${shouldAttach}`);
                 if (shouldAttach) {
-                    transformControls.attach(splatMesh);
+                    transformControls.attach(hitSplatObject);
                     transformControls.visible = true;
                     transformControls.enabled = true;
                     updateTransformModeButtons(transformControls.getMode()); // Update buttons on attach
