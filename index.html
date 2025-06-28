@@ -79,9 +79,9 @@
   <script type="importmap">
     {
         "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
-            "gaussian-splats-3d": "./lib/gaussian-splats-3d.module.js"
+            "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.174.0/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.174.0/examples/jsm/",
+            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/0.1.4/spark.module.js"
         }
     }
   </script>
@@ -106,9 +106,9 @@
   <div id="container"> <!-- Removed flex classes -->
     <div id ="view-panel" class="p-3 text-gray-900 rounded-lg border border-gray-300 w-auto text-center shadow-lg"> <!-- Adjusted padding, width, text-align -->
         <div class="flex flex-col space-y-2"> <!-- Use flex column for layout -->
-            <label for="viewFile" class="inline-block" title="Load .ply, .ksplat, .splat, .spz">
-                <span class="text-blue-800 border border-blue-300 bg-blue-100 hover:bg-blue-200 hover:border-blue-500 hover:text-blue-900 py-1 px-3 rounded-md shadow-md cursor-pointer mx-auto block w-full">Add .ply, .ksplat, .splat, .spz</span>
-                <input type="file" id="viewFile" class="hidden" onchange="window.onFileChange(this)" accept=".ply,.ksplat,.splat,.spz"> <!-- Removed fileNameLabelID argument -->
+            <label for="viewFile" class="inline-block" title="Load .ply, .splat, .spz">
+                <span class="text-blue-800 border border-blue-300 bg-blue-100 hover:bg-blue-200 hover:border-blue-500 hover:text-blue-900 py-1 px-3 rounded-md shadow-md cursor-pointer mx-auto block w-full">Add .ply, .splat, .spz</span>
+                <input type="file" id="viewFile" class="hidden" onchange="window.onFileChange(this)" accept=".ply,.splat,.spz"> <!-- Updated file extensions for new library -->
             </label>
             <div class="flex items-center justify-center space-x-3"> <!-- Flex row for inputs -->
                  <div class="flex items-center space-x-1">
@@ -127,7 +127,7 @@
             </div>
             <!-- Add Rotation Checkbox -->
             <div class="flex items-center justify-center space-x-1 mt-1">
-                <input type="checkbox" id="rotateSplatCheckbox" class="form-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" checked>
+                <input type="checkbox" id="rotateSplatCheckbox" class="form-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
                 <label for="rotateSplatCheckbox" class="ml-2 text-sm text-gray-600">Rotate 180° (X-axis)</label>
             </div>
             <!-- Add Camera FOV Control -->
@@ -141,10 +141,11 @@
                 <label for="bgColorPicker" class="text-sm text-gray-600 whitespace-nowrap">BG:</label>
                 <input type="color" id="bgColorPicker" value="#000000" class="h-6 w-full border border-gray-400 rounded cursor-pointer mx-2">
             </div>
-            <!-- Measurement Controls -->
+            <!-- Action Controls -->
             <div class="border-t pt-2 mt-2 border-gray-300 flex justify-center space-x-2">
                  <button id="clearPointsButton" class="text-xs bg-red-100 hover:bg-red-200 text-red-800 border border-red-300 hover:border-red-500 py-1 px-2 rounded shadow-sm">Clear Points</button>
                  <button id="clearMeasurementsButton" class="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-800 border border-yellow-300 hover:border-yellow-500 py-1 px-2 rounded shadow-sm">Clear Measures</button>
+                 <button id="clearAllButton" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-800 border border-gray-400 py-1 px-2 rounded shadow-sm">Clear All</button>
             </div>
             <!-- Transform Mode Toggle Button -->
             <div class="border-t pt-2 mt-2 border-gray-300 flex justify-center">
@@ -164,13 +165,14 @@
   <div id="renderer-container"></div>
 
   <script type="module">
-    import * as GaussianSplats3D from 'gaussian-splats-3d';
     import * as THREE from 'three';
+    import { SplatMesh } from '@sparkjsdev/spark';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { DragControls } from 'three/addons/controls/DragControls.js';
     import { TransformControls } from 'three/addons/controls/TransformControls.js'; // Import TransformControls
 
-    let scene, camera, renderer, controls, dropInViewer;
+    let scene, camera, renderer, controls;
+    const splatMeshes = []; // An array to hold all splat meshes
     // Add references for FOV controls
     let fovSlider, fovValueDisplay;
     // Add reference for background color picker
@@ -200,6 +202,16 @@
     let rightMouseDragHappened = false;
     const rightMouseDragThreshold = 5; // pixels for drag detection
     let rightMouseDownPosition = { x: 0, y: 0 };
+    
+    // --- Raycaster Setup ---
+    const outHits = [];
+    const renderDimensions = new THREE.Vector2();
+    const clickRaycaster = new THREE.Raycaster(); // Use a separate raycaster for clicks to avoid conflicts
+    clickRaycaster.params.Line = clickRaycaster.params.Line || {}; // Ensure params.Line exists
+    clickRaycaster.params.Line.threshold = 0.1; // Adjust threshold for clicking lines
+    clickRaycaster.params.Points = clickRaycaster.params.Points || {}; // Ensure params.Points exists
+    clickRaycaster.params.Points.threshold = 0.1; // If needed for points
+    // Initialize raycaster for drag operations
 
     // --- Measurement Variables ---
     let measurementState = 'idle'; // 'idle', 'measuring'
@@ -290,32 +302,26 @@
 
         // Controls
         controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true; // Optional damping effect
+        controls.enableDamping = false; // Optional damping effect
         controls.target.set(0, 0, 0); // Set initial lookAt
         controls.update();
 
         // Axes Helper
         const axesHelper = new THREE.AxesHelper( 5 ); // Length of 5 units
-        scene.add( axesHelper );
+        scene.add(axesHelper);
 
         // Grid Helper
         const size = 10; // Size of the grid (e.g., 10x10 units)
         const divisions = 10; // Number of divisions within the grid
         const gridHelper = new THREE.GridHelper( size, divisions );
-        scene.add( gridHelper );
+        scene.add(gridHelper);
 
-        // DropInViewer - Initialize with SH degree 2 (max) to support loading files up to SH 2
-        dropInViewer = new GaussianSplats3D.DropInViewer({
-             'sharedMemoryForWorkers': false,
-             'gpuAcceleratedSort': false,
-             'sphericalHarmonicsDegree': 2 // Initialize with max SH degree support
-        });
-        scene.add(dropInViewer); // Add viewer to the scene
+        // SplatMesh will be created when a file is loaded - no initialization needed here
 
         // --- Marker Group Initialization (Moved Earlier) ---
         // Create a group to hold all marker spheres
         markerGroup = new THREE.Group(); // Assign to the outer scope variable
-        scene.add(markerGroup); // Add the group to the scene
+        scene.add(markerGroup);
 
         // --- Measurement Group Initialization ---
         measurementGroup = new THREE.Group();
@@ -328,7 +334,7 @@
         });
         transformControls.visible = false; // Initially hidden
         transformControls.enabled = false; // Initially disabled
-        scene.add(transformControls);
+        // scene.add(transformControls); // BUG FIX: DO NOT add transformControls to the scene directly.
 
         // Get FOV UI elements
         fovSlider = document.getElementById('fovSlider');
@@ -584,12 +590,14 @@
             }
         }, true); // Use capture phase
 
-        // --- Measurement Event Listeners ---
+        // --- UI and Measurement Event Listeners ---
         renderer.domElement.addEventListener('click', onClick, false); // Use click for measurement AND gizmo activation
         renderer.domElement.addEventListener('contextmenu', onRightClick, false); // Added for right-click to delete measurement
         window.addEventListener('keydown', onKeyDown, false);
-        document.getElementById('clearPointsButton').addEventListener('click', clearReferencePoints);
-        document.getElementById('clearMeasurementsButton').addEventListener('click', clearMeasurements);
+        document.getElementById('clearPointsButton').addEventListener('click', () => clearReferencePoints(true));
+        document.getElementById('clearMeasurementsButton').addEventListener('click', () => clearMeasurements(true));
+        document.getElementById('clearAllButton').addEventListener('click', clearAll);
+
 
         // Handle window resize
         window.addEventListener('resize', onWindowResize, false);
@@ -615,27 +623,15 @@
 
     // --- Splat Loading Logic ---
 
-    // Pass SH degree to loaders that support it
-    function fileBufferToSplatBuffer(fileBufferData, format, alphaRemovalThreshold, outSphericalHarmonicsDegree) {
-      const optimize = false;
-      const compressionLevel = 0;
-      // Use outSphericalHarmonicsDegree passed from UI
-      if (format === GaussianSplats3D.SceneFormat.Ply) {
-        return GaussianSplats3D.PlyLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, outSphericalHarmonicsDegree, undefined, undefined, undefined, undefined);
-      } else if (format === GaussianSplats3D.SceneFormat.Splat) {
-        // SplatLoader doesn't take SH degree as input, it's determined by the file
-        return GaussianSplats3D.SplatLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, undefined, undefined, undefined, undefined);
-      } else if (format === GaussianSplats3D.SceneFormat.KSplat) {
-        // KSplatLoader doesn't take SH degree as input
-        return GaussianSplats3D.KSplatLoader.loadFromFileData(fileBufferData.data);
-      } else if (format === GaussianSplats3D.SceneFormat.Spz) {
-        // SpzLoader takes SH degree as input
-        return GaussianSplats3D.SpzLoader.loadFromFileData(fileBufferData.data, alphaRemovalThreshold, compressionLevel, optimize, outSphericalHarmonicsDegree, undefined, undefined, undefined, undefined);
-      } else {
-        return Promise.reject(`Unsupported file format: ${format}`);
-      }
+    // Supported file extensions for @sparkjsdev/spark
+    const supportedExtensions = ['.ply', '.splat', '.spz']; // Note: .ksplat is no longer supported
+    
+    // Helper function to check if file is supported
+    function getFileExtension(filename) {
+      const lastDotIndex = filename.lastIndexOf('.');
+      return lastDotIndex !== -1 ? filename.slice(lastDotIndex).toLowerCase() : '';
     }
-
+    
     // Assign functions to window object to make them accessible from inline HTML event handlers
     window.onFileChange = function(arg) { // Assign directly to window.onFileChange
       const viewFile = document.getElementById("viewFile");
@@ -657,66 +653,55 @@
       }
 
       const viewFileName = viewFile.files[0].name.trim();
-      const format = GaussianSplats3D.LoaderUtils.sceneFormatFromPath(viewFileName);
-
-      if (format === undefined) {
-          console.error("Could not determine file format. Ensure file has a .ply, .splat, .ksplat, or .spz extension.");
+      const fileExtension = getFileExtension(viewFileName);
+      
+      if (!supportedExtensions.includes(fileExtension)) {
+          console.error(`Unsupported file format: ${fileExtension}. Please use one of: ${supportedExtensions.join(', ')}`);
           return;
       }
 
       try {
-        const fileReader = new FileReader();
-        fileReader.onload = function(){
-          console.log("Processing file...");
-          setTimeout(() => { // Keep setTimeout for UI responsiveness during parse
-              try {
-                // Pass alpha threshold and SH degree
-                const splatBufferPromise = fileBufferToSplatBuffer({data: fileReader.result}, format, alphaRemovalThreshold, sphericalHarmonicsDegree);
+        // Create a URL for the file to load with SplatMesh
+        const fileURL = URL.createObjectURL(viewFile.files[0]);
+        console.log(`Loading splat from URL: ${fileURL}`);
+        
+        try {
+          // Create a new SplatMesh instance - this matches the Spark example approach
+          const newSplatMesh = new SplatMesh({
+            url: fileURL,
+            alphaThreshold: alphaRemovalThreshold / 255
+          });
+                   
+          // Apply rotation if needed 
+          if (rotateSplat) {
+            console.log("Applying 180-degree X rotation to splat mesh...");
+            newSplatMesh.rotation.x += Math.PI; // Rotate 180 degrees around X-axis
+            console.log("Rotation applied to mesh.");
+          }
+          
+          // Add the new splat mesh to the scene and our array
+          scene.add(newSplatMesh);
+          splatMeshes.push(newSplatMesh);
+          
+          console.log("SplatMesh created and added to scene");
 
-                splatBufferPromise.then((splatBuffer) => {
-                    // Prepare options for adding the buffer
-                    const splatBufferOptions = {
-                        'splatAlphaRemovalThreshold': alphaRemovalThreshold,
-                        // SH degree is inherent in the loaded splatBuffer, not needed here
-                    };
+          // IMPROVEMENT: Add an event listener to the new mesh. Once it's ready, we can revoke the URL.
+          // This is more robust than a fixed timeout.
+          newSplatMesh.addEventListener('ready', () => {
+              console.log(`Splat mesh from ${fileURL} is ready. Revoking object URL.`);
+              URL.revokeObjectURL(fileURL);
+          });
 
-                    // Access the internal viewer and use its addSplatBuffers method
-                    // Set replaceExisting to false to additively load splats
-                    dropInViewer.viewer.addSplatBuffers([splatBuffer], [splatBufferOptions], true, false, false, false) // Changed replaceExisting to false
-                        .then(() => {
-                            console.log("Splat buffer added via internal viewer.");
-                            // Apply rotation to the Three.js object if checked
-                            if (rotateSplat && dropInViewer.viewer.splatMesh) {
-                                console.log("Applying 180-degree Y rotation to splat mesh...");
-                                // Rotate the splatMesh object directly
-                                dropInViewer.viewer.splatMesh.rotation.x += Math.PI; // Add 180 degrees (PI radians)
-                                console.log("Rotation applied to mesh.");
-                            }
-                            deactivateTransformMode(); // Deactivate transform mode on new load
-                        })
-                        .catch((e) => {
-                            console.error("Error adding splat buffer via internal viewer:", e);
-                        });
-                })
-                .catch((e) => {
-                    console.error("Error creating splat buffer:", e);
-                });
-              } catch (e) {
-                console.error("Could not process scene: " + e.message);
-              }
-          }, 10);
+        } catch (error) {
+          console.error("Error creating SplatMesh:", error);
         }
-        fileReader.onerror = function() {
-            console.error("Error reading file.");
-        }
-        console.log("Loading file...");
-        fileReader.readAsArrayBuffer(viewFile.files[0]);
+        
+        // Detach gizmo and deactivate mode after loading new splat data
+        deactivateTransformMode(); // Use helper function
+        
       } catch (e) {
         console.error("Could not load scene: " + e.message);
       }
-
-      // Detach gizmo and deactivate mode before loading new splat data
-      deactivateTransformMode(); // Use helper function
     }
 
     // --- Click-to-Spawn Reference Point Feature (Modified for dblclick) ---
@@ -789,12 +774,7 @@
         // Note: DragControls automatically updates its list when children are added to markerGroup
     }
 
-    // --- Raycaster Setup and Event Handling ---
-    const outHits = [];
-    const renderDimensions = new THREE.Vector2();
-    const clickRaycaster = new THREE.Raycaster(); // Use a separate raycaster for clicks to avoid conflicts
-    clickRaycaster.params.Line.threshold = 0.1; // Adjust threshold for clicking lines
-    clickRaycaster.params.Points.threshold = 0.1; // If needed for points
+    // --- Double Click Listener (for placing points ONLY) ---
 
     // --- Double Click Listener (for placing points ONLY) ---
     renderer.domElement.addEventListener('dblclick', onDoubleClickPlacePoint, false); // Renamed
@@ -818,21 +798,25 @@
 
         // 3. If idle & not UI: Place new point.
         // --- Raycast against splats to place a NEW point ---
-        const internalRaycaster = dropInViewer?.viewer?.raycaster;
-        if (!internalRaycaster || !dropInViewer.viewer.splatMesh || dropInViewer.viewer.splatMesh.getSplatCount() === 0) {
-            console.log("No splats loaded or raycaster not ready for placing point on double-click.");
+        if (splatMeshes.length === 0) {
+            console.log("No splats loaded for placing point on double-click.");
             return;
         }
 
+        // Use standard THREE.js raycasting with the new SplatMesh - following the example
         const rect = renderer.domElement.getBoundingClientRect();
-        const screenPosition = new THREE.Vector2(event.clientX - rect.left, event.clientY - rect.top);
-        renderer.getSize(renderDimensions);
-        outHits.length = 0;
-        internalRaycaster.setFromCameraAndScreenPosition(camera, screenPosition, renderDimensions);
-        internalRaycaster.intersectSplatMesh(dropInViewer.viewer.splatMesh, outHits);
-
-        if (outHits.length > 0) {
-            const hitPosition = outHits[0].origin;
+        const clickCoords = new THREE.Vector2(
+            (event.clientX / rect.width) * 2 - 1,
+            -(event.clientY / rect.height) * 2 + 1
+        );
+        
+        clickRaycaster.setFromCamera(clickCoords, camera);
+        
+        // Raycast against all loaded splat meshes
+        const hits = clickRaycaster.intersectObjects(splatMeshes);
+        
+        if (hits.length > 0) {
+            const hitPosition = hits[0].point;
             createCrossMarkerAtPosition(hitPosition, camera.position);
         } else {
             console.log("No splat hit on double-click (for new point placement).");
@@ -911,17 +895,26 @@
         // --- If not label or marker, check splat or empty space ---
 
         // 5. Check Splat Click (Gizmo Activation / Measurement Cancel)
-        const internalRaycaster = dropInViewer?.viewer?.raycaster;
         let splatHit = false;
-        if (internalRaycaster && dropInViewer.viewer.splatMesh && dropInViewer.viewer.splatMesh.getSplatCount() > 0) {
+        let hitSplatObject = null; // To store the specific splat that was hit
+        if (splatMeshes.length > 0) {
             const rect = renderer.domElement.getBoundingClientRect();
-            const screenPosition = new THREE.Vector2(event.clientX - rect.left, event.clientY - rect.top);
-            renderer.getSize(renderDimensions);
-            outHits.length = 0;
-            internalRaycaster.setFromCameraAndScreenPosition(camera, screenPosition, renderDimensions);
-            internalRaycaster.intersectSplatMesh(dropInViewer.viewer.splatMesh, outHits);
-            if (outHits.length > 0) {
-                splatHit = true;
+            const mouse = new THREE.Vector2(
+                ((event.clientX - rect.left) / rect.width) * 2 - 1,
+                -((event.clientY - rect.top) / rect.height) * 2 + 1
+            );
+            
+            clickRaycaster.setFromCamera(mouse, camera);
+            try {
+                // Intersect with all splat meshes in the scene
+                const intersects = clickRaycaster.intersectObjects(splatMeshes);
+                if (intersects.length > 0) {
+                    splatHit = true;
+                    hitSplatObject = intersects[0].object; // Get the specific splat mesh that was hit
+                }
+            } catch (e) {
+                console.warn("Error raycasting against splat meshes:", e);
+                splatHit = false;
             }
         }
         console.log(`onClick: Splat hit? ${splatHit}`);
@@ -936,10 +929,10 @@
 
             // Only attach gizmo if transform mode is active
             if (transformModeActive) {
-                const shouldAttach = transformControls.object !== dropInViewer.viewer.splatMesh;
+                const shouldAttach = transformControls.object !== hitSplatObject;
                 console.log(`onClick: Should attach gizmo (Transform Mode Active)? ${shouldAttach}`);
                 if (shouldAttach) {
-                    transformControls.attach(dropInViewer.viewer.splatMesh);
+                    transformControls.attach(hitSplatObject);
                     transformControls.visible = true;
                     transformControls.enabled = true;
                     updateTransformModeButtons(transformControls.getMode()); // Update buttons on attach
@@ -1005,8 +998,12 @@
             const intersectedObject = intersectsMarkers[0].object;
             if (intersectedObject.parent && intersectedObject.parent.userData.isReferencePoint) {
                 const crossToRemove = intersectedObject.parent;
+                const removedPosition = crossToRemove.position.clone(); // Get position before removing from scene
                 markerGroup.remove(crossToRemove);
                 console.log("Reference Point removed by right-click.");
+
+                // IMPROVEMENT: Clean up associated measurements
+                cleanupMeasurementsForPosition(removedPosition);
 
                 // If a measurement was active, reset it, as one of its points is now gone.
                 if (measurementState === 'measuring') {
@@ -1017,10 +1014,6 @@
                         resetMeasurementState();
                     }
                 }
-                // TODO: Future enhancement - intelligently remove only affected measurement segments
-                // For now, if any point of an active measurement is removed, the whole current measurement is reset.
-                // Also, existing completed measurements that used this point will remain, but the point will be gone.
-                // A more robust solution would be to iterate through all completed measurements and remove/update them.
                 return; // Marker deleted, action complete.
             }
         }
@@ -1089,41 +1082,55 @@
                 // console.log("Right mouse drag detected during pointermove."); // Optional: for debugging
             }
         }
+        
+        // Ensure clickRaycaster and required objects are initialized
+        if (!clickRaycaster || !camera || !renderer || !renderer.domElement) {
+            return;
+        }
 
         // Change cursor to pointer when hovering over a distance label in idle state
         let cursorStyle = 'crosshair';
-        if (measurementState === 'idle') {
-            clickRaycaster.setFromCamera(currentMouseNDC, camera);
-            const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
-                .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel);
-            if (intersectsLabels.length > 0) {
-                cursorStyle = 'pointer';
+        if (measurementState === 'idle' && measurementGroup) {
+            try {
+                clickRaycaster.setFromCamera(currentMouseNDC, camera);
+                const intersectsLabels = clickRaycaster.intersectObjects(measurementGroup.children, true)
+                    .filter(intersect => intersect.object.userData && intersect.object.userData.isDistanceLabel);
+                if (intersectsLabels.length > 0) {
+                    cursorStyle = 'pointer';
+                }
+            } catch (e) {
+                console.warn("Error checking for label intersections:", e);
             }
         }
         renderer.domElement.style.cursor = cursorStyle;
 
         // Update preview line only if measuring and hovering over a valid marker
-        if (measurementState === 'measuring' && currentMeasurementSequence.length > 0) {
-            clickRaycaster.setFromCamera(currentMouseNDC, camera);
-            const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
+        if (measurementState === 'measuring' && currentMeasurementSequence.length > 0 && markerGroup) {
+            try {
+                clickRaycaster.setFromCamera(currentMouseNDC, camera);
+                const intersectsMarkers = clickRaycaster.intersectObjects(markerGroup.children, true);
 
-            let hoveredMarker = null;
-            if (intersectsMarkers.length > 0) {
-                // Find the parent group which is the actual marker
-                let obj = intersectsMarkers[0].object;
-                while (obj && !obj.userData.isReferencePoint) {
-                    obj = obj.parent;
+                let hoveredMarker = null;
+                if (intersectsMarkers.length > 0) {
+                    // Find the parent group which is the actual marker
+                    let obj = intersectsMarkers[0].object;
+                    while (obj && !obj.userData.isReferencePoint) {
+                        obj = obj.parent;
+                    }
+                    // Check if it's a valid marker and not the last one added
+                    if (obj && obj.userData.isReferencePoint && obj !== currentMeasurementSequence[currentMeasurementSequence.length - 1].marker) {
+                        hoveredMarker = obj;
+                    }
                 }
-                // Check if it's a valid marker and not the last one added
-                if (obj && obj.userData.isReferencePoint && obj !== currentMeasurementSequence[currentMeasurementSequence.length - 1].marker) {
-                    hoveredMarker = obj;
-                }
-            }
 
-            if (hoveredMarker) {
-                updatePreviewLine(hoveredMarker.position); // Pass target position
-            } else {
-                updatePreviewLine(null); // Hide preview line
+                if (hoveredMarker) {
+                    updatePreviewLine(hoveredMarker.position); // Pass target position
+                } else {
+                    updatePreviewLine(null); // Hide preview line
+                }
+            } catch (e) {
+                console.warn("Error in raycasting for measurement preview:", e);
+                updatePreviewLine(null); // Ensure preview is hidden on error
             }
         } else {
              updatePreviewLine(null); // Ensure preview is hidden if not measuring
@@ -1405,6 +1412,7 @@
                 centroid.divideScalar(currentMeasurementSequence.length);
                 areaLabel.position.copy(centroid);
                 areaLabel.userData.isAreaLabel = true;
+                areaLabel.userData.polygonPoints = currentMeasurementSequence.map(p => p.point.clone()); // Store points for rescaling
                 areaLabel.userData.colorIndex = measurementColorIndex;
                 measurementGroup.add(areaLabel);
                 // Store area label reference (e.g., with the first point)
@@ -1678,48 +1686,91 @@
     }
 
     function updateAllMeasurementLabels() {
-        measurementGroup.children.forEach(child => {
+        // Create a temporary array of children to iterate over to avoid issues with modification during loop
+        const childrenToUpdate = [...measurementGroup.children];
+
+        childrenToUpdate.forEach(child => {
+            // Guard against child being removed from another operation in the same loop
+            if (!child.parent) return;
+
             if (child.userData.isDistanceLabel && child.userData.segmentStart && child.userData.segmentEnd) {
                 const originalDistance = child.userData.segmentStart.distanceTo(child.userData.segmentEnd);
                 const scaledDistance = originalDistance * scaleFactor;
                 const newText = scaledDistance.toFixed(2);
-                // Recreate label with new text (simplest way to update canvas texture)
-                const color = child.material.map.image.getContext('2d').fillStyle; // Attempt to get color (might be tricky)
-                const colorIndex = child.userData.colorIndex ?? 0; // Fallback color index
+                
+                const colorIndex = child.userData.colorIndex ?? 0;
                 const newLabel = createDistanceLabel(newText, measurementColors[colorIndex]);
                 newLabel.position.copy(child.position);
                 newLabel.userData = { ...child.userData }; // Copy user data
-                newLabel.userData.text = newText; // Update text in user data
+                newLabel.userData.text = newText;
+
+                // Also update the associated line's data if needed (not strictly necessary but good practice)
+                if (newLabel.userData.associatedLine) {
+                    newLabel.userData.associatedLine.userData.associatedLabel = newLabel;
+                }
 
                 measurementGroup.remove(child);
                 disposeLabel(child);
                 measurementGroup.add(newLabel);
 
-            } else if (child.userData.isAreaLabel) {
-                // Find the corresponding sequence to recalculate area
-                // This requires better linking between area labels and sequences, difficult without storing sequence data on label
-                // Simple approach: Remove and let user recalculate area if scale changes significantly
-                 console.warn("Area label update after scaling not fully implemented. Please clear and remeasure area if needed.");
-                 // measurementGroup.remove(child);
-                 // disposeLabel(child);
+            } else if (child.userData.isAreaLabel && child.userData.polygonPoints) {
+                // IMPROVEMENT: Area label found, recalculate area
+                const points = child.userData.polygonPoints;
+                const points2D = projectPointsToPlane(points);
+                const newArea = calculatePolygonArea(points2D) * (scaleFactor * scaleFactor);
+                const newText = `Area: ${newArea.toFixed(2)}`;
+
+                const colorIndex = child.userData.colorIndex ?? 0;
+                const newLabel = createDistanceLabel(newText, measurementColors[colorIndex], 14);
+                newLabel.position.copy(child.position);
+                newLabel.userData = { ...child.userData }; // Copy user data
+                newLabel.userData.text = newText;
+
+                measurementGroup.remove(child);
+                disposeLabel(child);
+                measurementGroup.add(newLabel);
             }
         });
     }
 
-    function clearReferencePoints() {
-        if (confirm("Are you sure you want to clear ALL reference points? This cannot be undone.")) {
-            // Remove markers from the group and scene
-            while (markerGroup.children.length > 0) {
-                const marker = markerGroup.children[0];
-                // DragControls might hold references, dispose might be needed if issues arise
-                markerGroup.remove(marker);
-                // Dispose geometry/material if they were unique per marker (not the case here)
+    function clearAll() {
+        if (!confirm("Are you sure you want to clear all splats, points, and measurements? This cannot be undone.")) return;
+
+        // 1. Clear Splats
+        while (splatMeshes.length > 0) {
+            const splat = splatMeshes.pop();
+            scene.remove(splat);
+            // The splat mesh should have a dispose method if the library is well-written
+            if (splat.dispose) {
+                splat.dispose();
             }
-            console.log("All reference points cleared.");
-            // Deactivate transform mode and detach gizmo
-            deactivateTransformMode(); // Use helper function (already hides options)
         }
-        // No need for the extra detachGizmo call outside the confirmation block
+        console.log("All splat meshes cleared.");
+
+        // 2. Clear points and measurements (use existing functions without confirmation)
+        clearReferencePoints(false); 
+        clearMeasurements(false); 
+
+        // 3. Ensure gizmo is detached (already handled by clear functions which call deactivateTransformMode)
+    }
+
+    function clearReferencePoints(askConfirmation = true) {
+        let confirmed = !askConfirmation;
+        if (askConfirmation) {
+            confirmed = confirm("Are you sure you want to clear ALL reference points? This will also remove connected measurements.");
+        }
+
+        if (confirmed) {
+            // Create a copy of children to iterate over, as the group will be modified.
+            [...markerGroup.children].forEach(marker => {
+                const removedPosition = marker.position.clone();
+                markerGroup.remove(marker);
+                cleanupMeasurementsForPosition(removedPosition); // Clean up associated measurements
+            });
+
+            console.log("All reference points and connected measurements cleared.");
+            deactivateTransformMode();
+        }
     }
 
     function clearMeasurements(askConfirmation = true) {
@@ -1749,20 +1800,47 @@
 
             resetMeasurementState(); // Ensure state is idle
             console.log("All measurements cleared.");
-            // Deactivate transform mode and detach gizmo
-            deactivateTransformMode(); // Use helper function (already hides options)
+            deactivateTransformMode();
         }
-         // No need for the extra detachGizmo call outside the confirmation block
     }
 
-    // Helper to clean up measurements if a point is deleted (basic version)
-    function cleanupMeasurementsForPoint(deletedMarker) {
-         // This function is no longer called when double-clicking a marker.
-         // It might still be relevant if the "Clear Reference Points" button behavior needs adjustment,
-         // but currently, that button also calls clearMeasurements directly.
-         console.warn("Reference point deleted. Measurements are NOT automatically cleared.");
-         // clearMeasurements(false); // Keep this commented out or remove if cleanup is never desired
+    // IMPROVEMENT: Helper to clean up measurements if a point is deleted
+    function cleanupMeasurementsForPosition(position) {
+        const linesToRemove = [];
+        const labelsToRemove = new Set(); // Use a Set to avoid duplicates
+
+        measurementGroup.children.forEach(child => {
+            if (child.userData.isMeasurementLine && child.geometry) {
+                const pos = child.geometry.attributes.position;
+                if (!pos || pos.count < 2) return;
+
+                const p1 = new THREE.Vector3().fromBufferAttribute(pos, 0);
+                const p2 = new THREE.Vector3().fromBufferAttribute(pos, 1);
+                
+                // Use a small epsilon for floating point comparison
+                if (p1.distanceToSquared(position) < 1e-6 || p2.distanceToSquared(position) < 1e-6) {
+                    linesToRemove.push(child);
+                    if (child.userData.associatedLabel) {
+                        labelsToRemove.add(child.userData.associatedLabel);
+                    }
+                }
+            }
+        });
+
+        if (linesToRemove.length > 0) {
+            console.log(`Removing ${linesToRemove.length} measurement segment(s) connected to deleted point.`);
+            linesToRemove.forEach(line => {
+                measurementGroup.remove(line);
+                line.geometry.dispose();
+                line.material.dispose();
+            });
+            labelsToRemove.forEach(label => {
+                measurementGroup.remove(label);
+                disposeLabel(label);
+            });
+        }
     }
+
 
     // --- Click-to-Spawn Reference Point Feature ---
     // The redundant code has been removed (duplicate createCrossMarkerAtPosition function and other duplicated code)
