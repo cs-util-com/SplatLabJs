@@ -88,20 +88,6 @@
 </head>
 
 <body class="h-screen m-0 font-sans text-base">
-  <!-- —— Support Bubble —— -->
-  <div id="support-bubble" title="Ask question or report bugs or feature requests" class="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-blue-600 text-white flex justify-center items-center shadow-md cursor-pointer z-50 hover:opacity-90">
-    <!-- simple chat icon (SVG) -->
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
-  </div>
-
-  <!-- —— Pop‑over —— -->
-  <div id="support-popover" class="fixed bottom-20 right-6 w-80 bg-white border border-gray-300 rounded-lg shadow-lg p-3 hidden z-50">
-    <textarea id="support-input" placeholder="Type your question, bug report, or feature request…" class="w-full min-h-[80px] resize-y border border-gray-400 rounded p-1.5 text-sm"></textarea>
-    <button id="support-send" class="mt-2 w-full py-2 border-none rounded bg-blue-600 text-white text-sm cursor-pointer hover:opacity-90">Submit</button>
-  </div>
-
   <!-- UI Panel -->
   <div id="container"> <!-- Removed flex classes -->
     <div id ="view-panel" class="p-3 text-gray-900 rounded-lg border border-gray-300 w-auto text-center shadow-lg"> <!-- Adjusted padding, width, text-align -->
@@ -163,6 +149,7 @@
 
   <!-- Three.js Renderer Container -->
   <div id="renderer-container"></div>
+  <script src="lib/support-bubble.js"></script>
 
   <script type="module">
     import * as THREE from 'three';
@@ -1844,115 +1831,7 @@
 
     // --- Click-to-Spawn Reference Point Feature ---
     // The redundant code has been removed (duplicate createCrossMarkerAtPosition function and other duplicated code)
-
-    /**********************
-     * Configuration of support bubble
-     **********************/
-    const GITHUB_URL = "https://github.com/cs-util-com/SplatLabJs"; // ← Replace with your repo
-    const CHAR_LIMIT = 2000; // post‑encoding limit
-
-    /**********************
-     * Console log capture
-     **********************/
-    (function captureConsole() {
-      const methods = ["log", "error", "warn", "info"];
-      const original = {};
-      const buffer = [];
-
-      methods.forEach(m => {
-        original[m] = console[m];
-        console[m] = function(...args) {
-          try {
-            const line = `[${m.toUpperCase()}] "${args.map(a => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}"`;
-            buffer.push(line);
-          } catch (_) {/* ignore serialization issues */}
-          original[m].apply(console, args);
-        };
-      });
-
-      window.__supportLogs = buffer;
-    })();
-
-    /**********************
-     * UI behaviour
-     **********************/
-    const bubble   = document.getElementById("support-bubble");
-    const popover  = document.getElementById("support-popover");
-    const textarea = document.getElementById("support-input");
-    const sendBtn  = document.getElementById("support-send");
-
-    function togglePopover() {
-      if (popover.style.display === "none" || !popover.style.display) {
-        popover.style.display = "block";
-        textarea.focus();
-      } else {
-        popover.style.display = "none";
-      }
-    }
-
-    bubble.addEventListener("click", togglePopover);
-
-    document.addEventListener("keydown", e => {
-      if (e.key === "Escape") popover.style.display = "none";
-    });
-
-    function buildPrompt(userText, consoleLog) {
-        const githubUrlParts = GITHUB_URL.split('/');
-        const repoOwner = githubUrlParts[githubUrlParts.length - 2];
-        const repoName = githubUrlParts[githubUrlParts.length - 1];
-
-        const prefix = `I am a user (not a developer) of ${GITHUB_URL} `
-        +`\nBrowse to that url and take a look at the code and readme to learn what this app does).`
-        +`\nEspecially look at the readme at https://raw.githubusercontent.com/${repoOwner}/${repoName}/main/readme.md and also at the source in https://raw.githubusercontent.com/${repoOwner}/${repoName}/main/index.html `
-        +`\nYour goal is to to be a support assistant and help me with my question, bug report or feature request.`
-        +`\nBelow you find user information that explains my current intent.`
-        +`\nIn case the provided user information sounds like question on how to do something or how something works use these rules:`
-        +`\nTake as much context as possible (especially from the github repo) to help the user as well as you can.`
-        +`\n\nIn case the provided user information sounds like an bug report or a feature request use these rules:`
-        +`\nYour task is to write a well structured github issue with a focus on the underlying user story.`
-        +`\n\nTo get to the fundamental goal for the issue, review if the provided user information already answers the "5 Whys" and if not ask me one question at a time until you have all information needed for the issue.`
-        +`\n\nProvide the full text for the issue in raw markdown notation (for copy paste) and since you reviewed the code, feel free to also include a section with an implementation suggestion, if applicable.`
-        +`\n\nHere is the provided user information:\n`;
-
-        let prompt = `${prefix}${userText}\n\nConsole log:\n${consoleLog}`;
-
-        // Encoding length helper
-        const encodedLength = str => encodeURIComponent(str).length;
-
-        // Trim console log until total ≤ limit
-        if (encodedLength(prompt) > CHAR_LIMIT) {
-            let trimmedLog = consoleLog;
-            while (encodedLength(prompt) > CHAR_LIMIT && trimmedLog.length > 0) {
-            // drop first 200 characters at a time
-            trimmedLog = trimmedLog.slice(200);
-            prompt = `${prefix}${userText}\n\nConsole log:\n${trimmedLog}...`;
-            }
-        }
-
-        return prompt;
-    }
-
-    function sendToChatGPT() {
-      const userText = textarea.value.trim();
-      if (!userText) return;
-
-      const consoleLog = window.__supportLogs.join("\n");
-      const prompt = buildPrompt(userText, consoleLog);
-
-      const url = `https://chat.openai.com/?q=${encodeURIComponent(prompt)}`;
-      window.open(url, "_blank", "noopener");
-      textarea.value = ""; // reset
-      popover.style.display = "none";
-    }
-
-    sendBtn.addEventListener("click", sendToChatGPT);
-
-    // allow Ctrl+Enter to send
-    textarea.addEventListener("keydown", e => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        sendToChatGPT();
-      }
-    });
+    
   </script>
 </body>
 </html>
